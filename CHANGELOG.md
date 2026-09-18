@@ -7,6 +7,9 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- Project-content search: press `s` for bounded, asynchronous literal smartcase search across the current `i` scope; results show `path:line` plus an excerpt, and `Enter` opens source view at the matching line. → [usage](docs/usage.md#searching-file-contents) · [keys](docs/keys.md)
+
 ## [1.16.0] - 2026-08-15
 
 ### Added

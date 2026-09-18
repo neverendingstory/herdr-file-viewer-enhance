@@ -45,10 +45,25 @@ that one, and the chain stops the moment a directory holds a file or a second en
 
 ## Finding a file fast
 
-Press `f` to open a **fuzzy finder** over every file in the tree (`.gitignore`-aware). Type to
-filter, `↑`/`↓` to move, `Enter` to open, `Esc` to cancel — far faster than scrolling the tree in a
+Press `f` to open a **fuzzy finder over file paths** (`.gitignore`-aware). Type to filter,
+`↑`/`↓` to move, `Enter` to open, `Esc` to cancel — far faster than scrolling the tree in a
 large repo. Confirming from a pinned preview moves focus to the active preview where the chosen
 file opens.
+
+### Searching file contents
+
+Press `s` when you know text **inside** a file instead. It searches off-thread and reports one row
+per matching source line as `path:line  excerpt`; `↑`/`↓` select a row, `←`/`→` scroll long rows,
+`Enter` opens that file in source view at the line, and `Esc` leaves the prior selection unchanged.
+The query is literal smartcase, like `/`: all-lowercase ASCII is case-insensitive, while any ASCII
+capital makes it case-sensitive.
+
+The search takes its scope from `i` when the popup opens. With ignored files hidden it honors
+`.gitignore` and Git excludes; with ignored files shown it includes them. The separate `.` toggle
+does not limit this search, so dotfiles are included unless ignored, but `.git/` is never searched.
+For a bounded, responsive scan it skips files over 1 MiB, binary (NUL-bearing), invalid-UTF-8, and
+unreadable files, and retains at most 500 matching lines; the popup says when further matches were
+omitted.
 
 ## Open at a known file
 

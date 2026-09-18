@@ -125,6 +125,25 @@ fn works_in_non_git_dir() {
     );
 }
 
+#[test]
+fn include_ignored_policy_mirrors_i_without_exposing_dot_git() {
+    let tmp = common::TempDir::new();
+    let root = tmp.path();
+    fs::write(root.join(".gitignore"), "ignored.txt\n").unwrap();
+    fs::write(root.join("visible.txt"), "visible").unwrap();
+    fs::write(root.join("ignored.txt"), "ignored").unwrap();
+    fs::create_dir(root.join(".git")).unwrap();
+    fs::write(root.join(".git/internal"), "private").unwrap();
+
+    let project = index::build_with_ignored(root, false);
+    assert!(project.iter().any(|p| p == "visible.txt"));
+    assert!(!project.iter().any(|p| p == "ignored.txt"));
+
+    let all = index::build_with_ignored(root, true);
+    assert!(all.iter().any(|p| p == "ignored.txt"));
+    assert!(!all.iter().any(|p| p == ".git" || p.starts_with(".git/")));
+}
+
 // (h) AC-N1: the filesystem is unchanged after build
 #[test]
 fn filesystem_unchanged_after_build() {

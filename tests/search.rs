@@ -1,4 +1,4 @@
-use herdr_file_viewer::search::{Match, find_matches};
+use herdr_file_viewer::search::{Match, find_matches, first_match};
 
 // ── AC-9: every occurrence found, multiple per line, document order ──────────
 
@@ -141,6 +141,14 @@ fn all_uppercase_query_matches_case_sensitively() {
         }],
         "query 'HELLO' (all-uppercase) should match only 'HELLO'"
     );
+}
+
+#[test]
+fn first_match_uses_the_same_smartcase_rule() {
+    assert_eq!(first_match("needle", "x NEEDLE y"), Some((2, 8)));
+    assert_eq!(first_match("Needle", "x NEEDLE y"), None);
+    assert_eq!(first_match("é", "aéz"), Some((1, 3)));
+    assert_eq!(first_match("", "anything"), None);
 }
 
 // ── AC-18: empty query and no-match → empty Vec ───────────────────────────────

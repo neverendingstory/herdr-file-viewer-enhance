@@ -217,6 +217,7 @@ customized).
 | **Annotations** | `add_annotation` | `a` | Add an in-memory annotation for the selected file |
 | | `show_annotations` | `A` | Open the session annotation overview |
 | **Search & jump** | `open_finder` | `f` | Open the go-to-file fuzzy finder |
+| | `project_search` | `s` | Search file contents across the current project scope |
 | | `open_go_to_line` | `:` | Open the go-to-line prompt |
 | | `open_search` | `/` | Open the in-file search prompt |
 | | `next_match` | `n` | Jump to the next search match (wraps) |
@@ -232,7 +233,8 @@ customized).
 below). Keys handled inside a modal are fixed and not remappable. That includes line-select `a`
 (add an annotation for the selected line/range), annotation-editor `←`/`→`/`Home`/`End`/`Enter`/`Esc`,
 and annotation-overview `j`/`k`/arrows, `Enter`/`e`, `d`, uppercase `D`, `y`, `Esc`/`q`, as well as
-the finder and `:` / `/` prompts. Remapping a global action never changes these local modal keys.
+the go-to-file finder, project-content search, and `:` / `/` prompts. Remapping a global action never
+changes these local modal keys.
 
 **Bindable keys** are the modifier-free surface the viewer already uses: any printable or shifted
 character (`g`, `<`, `{`, `?`, and capitals such as `A`, `D`, and `W` are each their own key), plus the named keys
