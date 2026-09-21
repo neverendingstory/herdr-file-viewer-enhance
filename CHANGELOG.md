@@ -7,6 +7,9 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+- Markdown code-block comments and generic subheadings now meet the WCAG 4.5:1 contrast minimum against the fixed code background. → [renderers](docs/renderers.md#bundled-markdown-palette)
+
 ## [1.16.0] - 2026-08-15
 
 ### Added
