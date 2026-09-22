@@ -1,9 +1,9 @@
-//! File Index — a recursive, gitignore-aware walk that returns every file under `root`
-//! as a root-relative path string.
+//! File Index — a recursive walk that returns every file under `root` as a root-relative path
+//! string, with an optional Git-ignore scope.
 //!
-//! Used by the Go-to-file feature (AC-12…AC-15, AC-18, AC-19, AC-N1, AC-N2, AC-N5).
-//! This is a separate walk from the Tree Model (ADR-0005): no depth limit, files only,
-//! and the entire `.git` subtree is pruned via `filter_entry`.
+//! Shared by Go-to-file and project-content search. This is a separate walk from the Tree Model
+//! (ADR-0005): no depth limit, files only, and the entire `.git` subtree is pruned via
+//! `filter_entry`.
 
 use ignore::WalkBuilder;
 use std::path::Path;
@@ -34,19 +34,30 @@ pub(crate) fn walk_builder(root: &Path) -> WalkBuilder {
 /// - Works in non-git directories without error (`require_git(false)`) — AC-19.
 /// - Read-only: no filesystem or git mutations — AC-N1, AC-N2.
 pub fn build(root: &Path) -> Vec<String> {
+    build_with_ignored(root, false)
+}
+
+/// Return every file under `root`, optionally including files matched by Git ignore sources.
+///
+/// `include_ignored` mirrors the tree's `i` toggle. The `.git` subtree is always pruned, even
+/// when ignored files are included. Results are sorted so consumers such as project search have a
+/// deterministic traversal order across platforms.
+pub fn build_with_ignored(root: &Path, include_ignored: bool) -> Vec<String> {
     let mut builder = walk_builder(root);
     builder
         .hidden(false) // include dotfiles (AC-17 depends on the index NOT hiding dotfiles)
-        .git_ignore(true)
-        .git_exclude(true)
+        .git_ignore(!include_ignored)
+        .git_exclude(!include_ignored)
         .filter_entry(|e| e.file_name() != ".git"); // prune entire .git subtree — AC-14
 
-    builder
+    let mut paths: Vec<String> = builder
         .build()
         .filter_map(Result::ok) // skip unreadable entries; traversal continues
         .filter(|e| e.file_type().is_some_and(|t| t.is_file())) // files only — AC-15
         .filter_map(|e| e.path().strip_prefix(root).ok().map(rel_to_slash))
-        .collect()
+        .collect();
+    paths.sort();
+    paths
 }
 
 /// Render a root-relative path as a forward-slash string on every platform. The rest of the app

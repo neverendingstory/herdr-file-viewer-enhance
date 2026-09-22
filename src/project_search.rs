@@ -1,0 +1,112 @@
+//! Project-content search modal state.
+//!
+//! This module owns only ephemeral prompt/list interaction state. Filesystem work is delegated to
+//! [`crate::repo_search`] and controller orchestration lives in `controller::project_search`.
+
+use crate::prompt::PromptInput;
+use crate::repo_search::{SearchHit, SearchOutput};
+
+const HSCROLL_STEP: u16 = 8;
+
+/// Mutable state held while the project-content search popup is open.
+pub struct ProjectSearchState {
+    prompt: PromptInput,
+    hits: Vec<SearchHit>,
+    cursor: usize,
+    hscroll: u16,
+    searching: bool,
+    limited: bool,
+    include_ignored: bool,
+}
+
+impl ProjectSearchState {
+    pub fn new(include_ignored: bool) -> Self {
+        Self {
+            prompt: PromptInput::new(),
+            hits: Vec::new(),
+            cursor: 0,
+            hscroll: 0,
+            searching: false,
+            limited: false,
+            include_ignored,
+        }
+    }
+
+    pub fn query(&self) -> &str {
+        self.prompt.query()
+    }
+
+    pub fn hits(&self) -> &[SearchHit] {
+        &self.hits
+    }
+
+    pub fn cursor(&self) -> usize {
+        self.cursor
+    }
+
+    pub fn hscroll(&self) -> u16 {
+        self.hscroll
+    }
+
+    pub fn searching(&self) -> bool {
+        self.searching
+    }
+
+    pub fn limited(&self) -> bool {
+        self.limited
+    }
+
+    pub fn include_ignored(&self) -> bool {
+        self.include_ignored
+    }
+
+    pub fn push(&mut self, c: char) {
+        self.prompt.push(c);
+        self.query_changed();
+    }
+
+    pub fn backspace(&mut self) {
+        self.prompt.backspace();
+        self.query_changed();
+    }
+
+    fn query_changed(&mut self) {
+        self.hits.clear();
+        self.cursor = 0;
+        self.hscroll = 0;
+        self.limited = false;
+        self.searching = !self.prompt.query().is_empty();
+    }
+
+    pub fn apply(&mut self, output: SearchOutput) {
+        self.hits = output.hits;
+        self.limited = output.limited;
+        self.searching = false;
+        self.cursor = self.cursor.min(self.hits.len().saturating_sub(1));
+    }
+
+    pub fn move_selection(&mut self, delta: isize) {
+        if self.hits.is_empty() {
+            self.cursor = 0;
+            return;
+        }
+        let max = self.hits.len() as isize - 1;
+        self.cursor = (self.cursor as isize + delta).clamp(0, max) as usize;
+    }
+
+    pub fn selected(&self) -> Option<&SearchHit> {
+        self.hits.get(self.cursor)
+    }
+
+    pub fn scroll_left(&mut self) {
+        self.hscroll = self.hscroll.saturating_sub(HSCROLL_STEP);
+    }
+
+    pub fn scroll_right(&mut self) {
+        self.hscroll = self.hscroll.saturating_add(HSCROLL_STEP);
+    }
+
+    pub fn clamp_hscroll(&mut self, max: u16) {
+        self.hscroll = self.hscroll.min(max);
+    }
+}

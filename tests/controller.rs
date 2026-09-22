@@ -5289,6 +5289,11 @@ fn re_root_only_reachable_via_switch_worktree_intent() {
         if ctrl.finder_open() {
             ctrl.handle_finder_key(key(KeyCode::Esc));
         }
+        // OpenProjectSearch owns its own modal too; close it so later intents (including the Part 2
+        // SwitchWorktree assertion) are still exercised from the same clean no-modal state.
+        if ctrl.project_search_open() {
+            ctrl.handle_project_search_key(key(KeyCode::Esc));
+        }
         // OpenSearch (in Intent::ALL) opens the search prompt; close it symmetrically
         // so the prompt modal guard cannot block SwitchWorktree in Part 2.
         if ctrl.prompt_open() {
