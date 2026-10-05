@@ -11,6 +11,7 @@ All notable changes to this project are documented here. The format is based on
 - Open the viewer at another directory: the `open-file-viewer-at` (split) and `open-file-viewer-at-tab` (tab) actions pop up a small prompt pre-filled with `~/` (the tab one names its tab `Files`). `Tab` completes directory and file names (ignoring case) and `↑`/`↓` pick from the matches, `Enter` opens the viewer there (a file opens in its directory, already shown), `Esc` cancels. Paths start from `~`, falling back to `/` when not found there, so system paths need no leading slash. Agents can do the same with `--env HERDR_FILE_VIEWER_ROOT=<dir>`. → [summoning](docs/summoning.md#open-at-another-directory)
 
 ### Fixed
+- Show committed branch changes (`M`/`A` and dirty-directory dots/colors) in the full tree from startup, without needing to toggle `c`. Baseline switches and refreshes also update the markers when the filter is off; `d` stays working-tree-only. → [usage](docs/usage.md#git-awareness)
 - Mouse selection now follows terminal cell width across full-width CJK text, including wrapped and horizontally-scrolled content. Thanks @nonhana (#143) → [usage](docs/usage.md#using-the-mouse)
 
 ### Changed
