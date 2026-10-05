@@ -51,6 +51,12 @@ pub enum CliAction {
     LaunchDecision,
     /// Print a tab-launcher decision from stdin JSON, then exit.
     LaunchDecisionTab,
+    /// Print the configured `open_direction` (`right` / `down`) on one line, then exit. The
+    /// launcher scripts ask for it so the herdr split goes where `config.toml` says; reading no
+    /// stdin and touching no layout, it is safe for them to call on every summon.
+    PrintOpenDirection,
+    /// Run the root-picker popup (`--pick-root`): ask for a directory, open a viewer tab there.
+    PickRoot,
     /// Start the TUI; `open` is the raw `--open` value when present (env is layered in `app::run`).
     Run { open: Option<String> },
 }
@@ -60,7 +66,10 @@ pub enum CliAction {
 /// Degrades, never fails:
 /// - unknown flags are ignored (herdr may append args we do not control)
 /// - a bare `--open` with no value is ignored (start with no open target)
-/// - `--launch-decision` / `--launch-decision-tab` win over a normal run (and over `--open`)
+/// - `--launch-decision` / `--launch-decision-tab` win over a normal run (and over `--open`),
+///   and over `--open-direction` — a launcher asking for a decision wants the decision.
+/// - `--open-direction` otherwise wins over a normal run: it is a query, not a session.
+/// - `--pick-root` runs the root-picker popup instead of the viewer (and ignores `--open`).
 ///
 /// `--open` values must not look like flags (`-…`); a following `-x` is left for the next
 /// iteration so it can be ignored as unknown rather than treated as a path.
@@ -72,6 +81,8 @@ where
     let mut open_flag: Option<String> = None;
     let mut launch_tab = false;
     let mut launch = false;
+    let mut print_direction = false;
+    let mut pick_root = false;
     let mut args = args.into_iter().peekable();
     while let Some(arg) = args.next() {
         let arg = arg.as_ref();
@@ -83,6 +94,12 @@ where
             "--launch-decision-tab" => {
                 launch = true;
                 launch_tab = true;
+            }
+            "--open-direction" => {
+                print_direction = true;
+            }
+            "--pick-root" => {
+                pick_root = true;
             }
             "--open" => {
                 let take = args
@@ -113,9 +130,33 @@ where
         } else {
             CliAction::LaunchDecision
         }
+    } else if print_direction {
+        CliAction::PrintOpenDirection
+    } else if pick_root {
+        CliAction::PickRoot
     } else {
         CliAction::Run { open: open_flag }
     }
+}
+
+/// [`parse_open_target`], except that a raw value naming an existing file is taken literally.
+///
+/// A file can be called `notes:12`; read through the line grammar it would open `notes` at line
+/// 12 (or fail). `is_file` says whether a raw value names an existing file (the caller resolves it
+/// under the tree root), so the root picker can hand over any canonical filename unescaped.
+pub fn parse_open_target_preferring_file(
+    raw: &str,
+    is_file: impl Fn(&str) -> bool,
+) -> Option<OpenTarget> {
+    let raw = raw.trim();
+    if !raw.is_empty() && is_file(raw) {
+        return Some(OpenTarget {
+            path: raw.to_string(),
+            line: None,
+            end_line: None,
+        });
+    }
+    parse_open_target(raw)
 }
 
 /// Parse a raw open-target string into path + optional line/range.
@@ -232,6 +273,25 @@ pub const OPEN_ENV: &str = "HERDR_FILE_VIEWER_OPEN";
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn an_existing_file_named_like_a_line_reference_is_taken_literally() {
+        let target = parse_open_target_preferring_file("/r/notes:12", |p| p == "/r/notes:12");
+        assert_eq!(
+            target,
+            Some(OpenTarget {
+                path: "/r/notes:12".into(),
+                line: None,
+                end_line: None,
+            })
+        );
+        // Not a file: the line grammar applies as before.
+        assert_eq!(
+            parse_open_target_preferring_file("src/a.rs:12", |_| false),
+            parse_open_target("src/a.rs:12")
+        );
+        assert_eq!(parse_open_target_preferring_file("  ", |_| true), None);
+    }
 
     #[test]
     fn parse_empty_is_none() {
@@ -438,6 +498,20 @@ mod tests {
     }
 
     #[test]
+    fn parse_args_pick_root_runs_the_picker_and_ignores_open() {
+        assert_eq!(parse_args(["--pick-root"]), CliAction::PickRoot);
+        assert_eq!(
+            parse_args(["--pick-root", "--open", "a.rs"]),
+            CliAction::PickRoot
+        );
+        // A launcher decision still wins: it is what a launcher script asked for.
+        assert_eq!(
+            parse_args(["--pick-root", "--launch-decision-tab"]),
+            CliAction::LaunchDecisionTab
+        );
+    }
+
+    #[test]
     fn parse_args_open_equals() {
         assert_eq!(
             parse_args(["--open=src/a.rs:2"]),
@@ -492,6 +566,48 @@ mod tests {
         // `--open --nope` must not treat `--nope` as the path.
         assert_eq!(
             parse_args(["--open", "--nope"]),
+            CliAction::Run { open: None }
+        );
+    }
+
+    #[test]
+    fn parse_args_open_direction() {
+        // The launcher's config probe: a query that must never start a TUI in the pane.
+        assert_eq!(
+            parse_args(["--open-direction"]),
+            CliAction::PrintOpenDirection
+        );
+    }
+
+    #[test]
+    fn parse_args_open_direction_wins_over_a_run_but_loses_to_launch_decision() {
+        // It outranks `--open` (a query, not a session) …
+        assert_eq!(
+            parse_args(["--open", "src/a.rs", "--open-direction"]),
+            CliAction::PrintOpenDirection
+        );
+        // … and yields to a launch decision in either order, so a launcher that somehow passes
+        // both still gets the OPEN/FOCUS/CLOSE line it is about to branch on.
+        assert_eq!(
+            parse_args(["--open-direction", "--launch-decision"]),
+            CliAction::LaunchDecision
+        );
+        assert_eq!(
+            parse_args(["--launch-decision", "--open-direction"]),
+            CliAction::LaunchDecision
+        );
+    }
+
+    #[test]
+    fn parse_args_open_direction_is_exact_not_a_prefix() {
+        // Degrade-don't-die: a near-miss spelling is an unknown flag, so the viewer starts
+        // normally instead of printing a direction into a pane the user is looking at.
+        assert_eq!(
+            parse_args(["--open-directions"]),
+            CliAction::Run { open: None }
+        );
+        assert_eq!(
+            parse_args(["--open-direction=down"]),
             CliAction::Run { open: None }
         );
     }

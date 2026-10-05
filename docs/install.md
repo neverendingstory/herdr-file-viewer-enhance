@@ -1,11 +1,12 @@
 # Install & updating
 
-Requirements: **herdr 0.7.0+**, on **Linux** or **macOS** (native Windows
+Requirements: **herdr 0.7.5+**, on **Linux** or **macOS** (native Windows
 `x86_64-pc-windows-msvc` is a [preview](windows.md)). **Git** must be on `PATH` at
 runtime. The viewer shells out to the system `git` CLI (read-only subcommands) for the
 git-aware tree (status markers, changed-only filter, baseline toggle) and the diff view.
 Without git the viewer still opens, but those features are degraded (no status colors, no
-diffs). The optional renderers (`glow` / `delta` / `bat`) are separate.
+diffs). git 2.39 (Apple's Xcode git) is supported. The optional renderers (`glow` / `delta` /
+`bat`) are separate.
 The system `curl` is optional: without it, document retrieval is unavailable without an error.
 See [external renderers](renderers.md).
 

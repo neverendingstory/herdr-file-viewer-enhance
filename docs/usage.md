@@ -30,11 +30,19 @@ setting off unless you need it; `.git/` itself always stays hidden. The tree's *
 **bottom border shows the current branch**, so you always know *where* and *on what branch* you're
 looking.
 
+The layout follows the pane's actual terminal dimensions, including a size adjustment while a
+herdr split is opening. It recovers without needing focus or navigation, even if the initial resize
+notification was missed; unchanged idle frames are not continuously repainted.
+
 Move the cursor with `↑`/`↓` (or `k`/`j`), expand/collapse a directory with `→`/`←` (or `l`/`h`) or
-`Enter`. The tree scrolls to keep the selection in view, and sideways for long or deeply-nested
-names — reachable by keyboard with `H` / `L` when the tree is focused. A scrollbar appears whenever
-there's more than fits. Narrow or widen the tree column with `<` / `>`, or drag the divider; the
-starting split, the tree's side, and a column cap are all [configurable](configuration.md).
+`Enter`. In the normal tree, `←` on a file or an already-collapsed directory walks to and collapses
+the nearest visible parent, so repeated presses climb the tree; it stops at a root child. This also
+skips folded segments when [`compact_dirs`](configuration.md) is on. Changed-only (`c`) and status
+(`d`) views keep their existing collapse behavior because their directory rows are always expanded.
+The tree scrolls to keep the selection in view, and sideways for long or deeply-nested names —
+reachable by keyboard with `H` / `L` when the tree is focused. A scrollbar appears whenever there's
+more than fits. Narrow or widen the tree column with `<` / `>`, or drag the divider; the starting
+split, the tree's side, and a column cap are all [configurable](configuration.md).
 
 On a **deeply nested** layout the per-segment tree spends most of a narrow column on indentation, and
 the file names — the part you came for — are what gets truncated. Set
@@ -125,9 +133,10 @@ expanding it only within double quotes.
 
 The viewed root comes from the focused herdr pane's working directory (resolved to that repository's
 worktree top level), so an agent's own `cd` does not move it. To point it at a particular repository,
-split a focused pane with `--cwd "$repo"` first, launch, then close that helper — the root is captured
-at launch. Do not add `--cwd` to the launch itself: herdr resolves the pane's relative command against
-it, so it fails outside a built plugin checkout and silently runs that checkout's binary inside one.
+add `--env "HERDR_FILE_VIEWER_ROOT=$repo"` with the repository's **absolute** path (a relative or
+missing path is ignored). Do not add `--cwd` to the launch: herdr resolves the pane's relative
+command against it, so it fails outside a built plugin checkout and silently runs that checkout's
+binary inside one.
 
 The Herdr pane command applies to Linux, macOS, and WSL. On native Windows preview, the Files action
 cannot accept an open target, so use WSL for this flow or, if the binary is on `PATH`, run
@@ -236,6 +245,9 @@ Git status is woven straight into the tree, not a separate mode:
   deleted, `?` untracked — and a directory containing any change carries a `●`. They're **colored**
   so changes read at a glance (changed files and dirty folders red, new files green), with the glyph
   as a non-color cue so status survives a colorblind palette or a non-default terminal theme.
+  They appear in the full tree from startup: working-tree status takes precedence, with changes
+  against the active baseline filling in committed branch changes. Pressing `c` only filters the
+  rows; it is not needed to populate markers. `b` updates these baseline markers too.
 - **Changed-files-only filter**: press `c` to restrict the tree to files changed against the active
   baseline (`b`) — useful for reviewing a whole branch (merge-base) or just uncommitted work (`HEAD`).
 - **Step through the changed files**: press `]` / `[` to jump the tree cursor straight to the next
@@ -263,7 +275,7 @@ Git status is woven straight into the tree, not a separate mode:
 
 Git is read through the system `git` CLI (read-only subcommands only). Without git on `PATH` the
 viewer still opens, but the status markers, filter, baseline, and diffs are degraded — see
-[install](install.md).
+[install](install.md). git 2.39 (Apple's Xcode git) is supported.
 
 ## Navigating within a file
 
@@ -398,5 +410,6 @@ display-only and never installs, opens, or copies anything. Control remote notic
 
 The mouse is additive and on by default: click a tree row to select it, double-click to
 open/expand, use the wheel to scroll, drag a scrollbar or the divider, and drag over content text to
-select-and-copy without any mode. The full gesture table is in the [keys reference](keys.md#mouse).
+select-and-copy without any mode. Character selection follows terminal cell width, so full-width CJK
+text selects at the same boundary you see on screen. The full gesture table is in the [keys reference](keys.md#mouse).
 `Shift`+drag is deliberately left to your terminal's own native selection.

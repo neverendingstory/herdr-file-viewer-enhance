@@ -1112,6 +1112,10 @@ impl Controller {
             bindings: crate::input::default_bindings(),
             key_load_outcome: crate::input::KeyLoadOutcome::default(),
         };
+        // Bound the tree's ancestor `.gitignore` search at this repo's own boundary rather than
+        // letting it climb into an unrelated enclosing directory/repository (see
+        // `index::walk_builder`); a no-op (stays `false`) outside a repo.
+        ctrl.tree.set_is_git_repo(is_git_repo);
         ctrl.refresh_git_state();
         ctrl.dispatch_render();
         ctrl
@@ -1258,6 +1262,7 @@ impl Controller {
         self.root = resolved.root.clone();
         self.is_git_repo = resolved.is_git_repo;
         self.tree = TreeModel::new(resolved.root.clone());
+        self.tree.set_is_git_repo(self.is_git_repo);
         self.tree.set_compact_dirs(self.compact_dirs); // a carried session preference (AC-12)
         // Recompute the cached branch for the new root's bottom-border title. Cheap and
         // synchronous: a single `git rev-parse` against the already-resolved repo root, done once
@@ -1878,7 +1883,7 @@ impl Controller {
         // `tree.selected()` (which re-runs the gitignore-aware filesystem walk) a second time
         // for the wrap decision — `visible_nodes()` is the hot, per-frame path.
         let nodes = self.tree.visible_nodes();
-        let selected = self.tree.cursor();
+        let selected = self.tree.cursor_in(&nodes);
         // Active wrapping responds immediately to the live `w` preference while a width-sensitive
         // reflow is pending; the settled document captures the same value when that render lands.
         let wrap = self.wrap_for(nodes.get(selected));
@@ -2318,11 +2323,16 @@ impl Controller {
     ///
     /// Status mode and baseline-aware changed-only share the tree's single `changed_only` flag, so
     /// a relaxed filter must clear both mirrors; while status mode is on it owns the flag, which
-    /// leaves `changed_only` false.
+    /// leaves `changed_only` false. A relaxed status mode also hands the tree back the baseline
+    /// changed-set, which `d` had swapped for working-tree status, so full-tree markers stay
+    /// baseline-aware (the same restore as leaving `d` by key).
     pub(super) fn resync_filter_mirrors(&mut self) {
         if self.tree.changed_only() {
             self.changed_only = !self.status_mode;
         } else {
+            if self.status_mode {
+                self.tree.set_changed_only(false, &self.changed);
+            }
             self.changed_only = false;
             self.status_mode = false;
         }
@@ -2549,7 +2559,10 @@ impl Controller {
     }
 
     /// Left (←/h): collapse the selected directory when the tree is focused, or scroll the
-    /// content pane left when it is focused.
+    /// content pane left when it is focused. In the normal tree, a file or already-collapsed
+    /// directory instead walks to its nearest visible ancestor and collapses it. Changed-only and
+    /// status trees keep their existing behavior because their directory rows are synthetic and
+    /// always expanded.
     fn collapse(&mut self) -> Effects {
         if self.focus == Focus::Content {
             return self.scroll_content_h(-(HSCROLL_STEP as i32));
@@ -2557,11 +2570,35 @@ impl Controller {
         if self.focus == Focus::Pinned {
             return self.scroll_pinned_h(-(HSCROLL_STEP as i32));
         }
-        if let Some(node) = self.tree.selected()
-            && node.kind == NodeKind::Dir
-        {
+        let Some(node) = self.tree.selected() else {
+            return Effects::noop();
+        };
+        // During an asynchronous re-root refresh, the fresh tree has not received its
+        // changed-only filter yet. The controller's carried mode state is authoritative during
+        // that interval, so c/d cannot briefly fall through to normal-tree walk-up behavior.
+        if self.changed_only || self.status_mode {
+            if node.kind == NodeKind::Dir {
+                self.tree.collapse(&node.path);
+                return Effects::redraw();
+            }
+            return Effects::noop();
+        }
+        if node.kind == NodeKind::Dir && node.expanded {
             self.tree.collapse(&node.path);
             return Effects::redraw();
+        }
+
+        let mut current = node.path.as_path();
+        while let Some(parent) = current.parent() {
+            if parent == self.root || !parent.starts_with(&self.root) {
+                return Effects::noop();
+            }
+            if self.tree.select(parent) {
+                self.tree.collapse(parent);
+                self.dispatch_render();
+                return Effects::redraw();
+            }
+            current = parent;
         }
         Effects::noop()
     }

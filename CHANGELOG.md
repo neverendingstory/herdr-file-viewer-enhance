@@ -7,8 +7,33 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- Open the viewer at another directory: the `open-file-viewer-at` (split) and `open-file-viewer-at-tab` (tab) actions pop up a small prompt pre-filled with `~/` (the tab one names its tab `Files`). `Tab` completes directory and file names (ignoring case) and `↑`/`↓` pick from the matches, `Enter` opens the viewer there (a file opens in its directory, already shown), `Esc` cancels. Paths start from `~`, falling back to `/` when not found there, so system paths need no leading slash. Agents can do the same with `--env HERDR_FILE_VIEWER_ROOT=<dir>`. → [summoning](docs/summoning.md#open-at-another-directory)
+
 ### Fixed
+- The selected file stays selected when a file appears or disappears above it. A focus refresh or `r` used to move the highlight to a different file. Thanks @sftinc (#181)
+- Recover the initial pane layout without a keypress when a split resize notification is missed during startup. Root headers and the `? help` footer no longer remain clipped or wrapped until focus/navigation; unchanged idle frames still do not redraw. Thanks @rsaulo (#185) → [usage](docs/usage.md#the-tree)
+- Show committed branch changes (`M`/`A` and dirty-directory dots/colors) in the full tree from startup, without needing to toggle `c`. Baseline switches and refreshes also update the markers when the filter is off; `d` stays working-tree-only. → [usage](docs/usage.md#git-awareness)
+- Mouse selection now follows terminal cell width across full-width CJK text, including wrapped and horizontally-scrolled content. Thanks @nonhana (#143) → [usage](docs/usage.md#using-the-mouse)
 - Markdown code-block comments and generic subheadings now meet the WCAG 4.5:1 contrast minimum against the fixed code background. → [renderers](docs/renderers.md#bundled-markdown-palette)
+
+### Changed
+- The tab action (`prefix+shift+f`) now switches only to a viewer showing the repo you are in, so a viewer opened on another directory no longer captures it. To support this, a running viewer keeps its working directory on the root it shows (renderers, the editor and other tools it starts still run from the plugin directory). → [summoning](docs/summoning.md#open-in-a-tab-instead-of-a-split)
+- Requires herdr 0.7.5 or newer (popup support). → [install](docs/install.md)
+
+## [1.17.0] - 2026-09-16
+
+### Added
+- `open_direction`: choose which way the summon key splits your pane — `"right"` (the default, viewer beside your work) or `"down"`, which keeps the terminal on top and puts the viewer underneath. `"bottom"` is accepted as a synonym. The tab action is unaffected, and the launcher reads it per summon, so the next `prefix+f` obeys it with no reload. Thanks @diegopzz and @pmaxvsbobo (#152, #167) → [configuration](docs/configuration.md) · [summoning](docs/summoning.md#split-beside-or-below)
+
+### Fixed
+- Restore Git status, branch, and diffs on git 2.39 (Apple’s Xcode git), while disabling configured filter commands. Thanks @arykhoda (#160, #162) → [usage](docs/usage.md#git-awareness) · [install](docs/install.md)
+- The tree and Go-to-file index no longer inherit `.gitignore` rules from an unrelated directory or repository above a browsed Git repository. The ancestor-`.gitignore` search climbed to the filesystem root with no repo-boundary check, so a repo nested under an unrelated enclosing `.gitignore` (a monorepo checkout, a dotfiles-managed home directory) could render a completely empty tree with no error. Thanks @rubenvarela (#166).
+- Content placeholders now distinguish a binary file from a broken symlink, an out-of-root path, an unreadable file, or a non-regular file. Thanks @samsimsom (#171)
+
+### Changed
+- `baseline = "base"` or `"head"` selects the Git diff baseline used when the viewer starts. Omitting it keeps the existing context-smart default, and `b` still toggles during the session. Thanks @AntonyKor (#138) → [configuration](docs/configuration.md)
+- `←`/`h` now walks up from a file or already-collapsed directory in the normal tree, collapsing the nearest visible parent and updating the content pane. Changed-only and status trees keep their existing behavior. → [usage](docs/usage.md#the-tree) · [keys](docs/keys.md)
 
 ## [1.16.0] - 2026-08-15
 

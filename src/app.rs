@@ -24,7 +24,8 @@ use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use ratatui::DefaultTerminal;
+use ratatui::backend::Backend;
+use ratatui::{DefaultTerminal, Terminal};
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::io;
@@ -47,9 +48,10 @@ const RENDER_TIMEOUT: Duration = Duration::from_secs(5);
 /// [`crate::open_target::OPEN_ENV`] (`HERDR_FILE_VIEWER_OPEN`) as flag > env; an absent/empty
 /// pair leaves startup selection unchanged.
 pub fn run(open_flag: Option<String>) -> io::Result<()> {
+    // Before anything can move the cwd (`follow_root`): external tools keep running from here.
+    crate::proc::remember_launch_dir();
     let ctx = host::from_env();
     let resolved = root::resolve(&ctx);
-    let baseline = git::default_baseline(&resolved);
 
     // Load + resolve the plugin's optional TOML config once, up front (AC-3..AC-5, AC-14, AC-16,
     // AC-17): `eff` is the fully-resolved config > env > default settings the rest of `run` wires
@@ -98,23 +100,26 @@ pub fn run(open_flag: Option<String>) -> io::Result<()> {
     });
     let clipboard: Box<dyn Clipboard> = Box::new(Osc52Clipboard);
 
-    // Wired values for the Settings display (AC-1..AC-4): built from the same startup resolution
-    // as the live components below so the overlay shows what's actually in effect.
-    let settings_wired = settings_wired(&eff, current_os_kind(), platform_editor);
-
     // Seed the changed-file view policy during construction so the first render is dispatched in
-    // its final mode (the single worker cannot cancel a job it has already started). `baseline`
-    // was already built from `resolved` above, so moving the resolved root here is its last use.
-    let mut controller = Controller::new_with_changed_file_view(
+    // its final mode (the single worker cannot cancel a job it has already started). The helper
+    // resolves the configured-or-context-smart baseline and passes that exact value to Controller.
+    let mut controller = startup_controller(
         resolved,
-        baseline,
+        &eff,
         Components {
             providers,
             editor,
             clipboard,
             renderers: Some(renderers),
         },
-        eff.changed_file_view,
+    );
+    // Wired values for the Settings display (AC-1..AC-4): built from the same controller startup
+    // result as the live components, so `?` reports the baseline actually in effect.
+    let settings_wired = settings_wired(
+        &eff,
+        controller.baseline(),
+        current_os_kind(),
+        platform_editor,
     );
     // Apply the config-driven startup hide-dotfiles default (AC-9). The interactive `.` toggle
     // still flips it later.
@@ -141,8 +146,12 @@ pub fn run(open_flag: Option<String>) -> io::Result<()> {
     // after layout/config wiring so reveal + render see the same filters as a live session.
     // Soft-fails with an action notice; never aborts startup.
     let open_env = std::env::var(crate::open_target::OPEN_ENV).ok();
+    let root = controller.root().to_path_buf();
+    let names_a_file =
+        |raw: &str| crate::open_target::resolve_under_root(&root, raw).is_some_and(|p| p.is_file());
     if let Some(raw) = crate::open_target::pick_raw_open(open_flag.as_deref(), open_env.as_deref())
-        && let Some(target) = crate::open_target::parse_open_target(&raw)
+        && let Some(target) =
+            crate::open_target::parse_open_target_preferring_file(&raw, names_a_file)
     {
         controller.apply_open_target(&target);
     }
@@ -221,6 +230,20 @@ pub fn run(open_flag: Option<String>) -> io::Result<()> {
     outcome
 }
 
+/// Keep the process cwd on the tree root, re-syncing after a worktree switch re-roots the
+/// session. herdr reports each pane's live process cwd in `pane list`, so this is how the
+/// root-aware tab launcher (`launch::launch_decision_tab`) learns which root a running viewer
+/// shows without any extra host API. Children must not inherit this cwd (it may be an untrusted
+/// repository): git runs with explicit `-C <repo>`, and every other external tool goes through
+/// [`crate::proc::in_launch_dir`], which pins it to the directory herdr launched us from.
+/// Best-effort: a failed `chdir` only makes the launcher open a fresh viewer instead of switching.
+fn follow_root(root: &Path, last: &mut PathBuf) {
+    if root != last.as_path() {
+        let _ = std::env::set_current_dir(root);
+        *last = root.to_path_buf();
+    }
+}
+
 /// Route annotation-modal raw keys before configurable global decoding. Returning `Some` means
 /// the modal consumed ownership even when the particular key is an inert no-op, so no printable or
 /// fixed modal key can leak to a global quit/editor/copy action.
@@ -239,27 +262,45 @@ fn route_annotation_key(
     }
 }
 
+/// Reconcile terminal dimensions even while idle, painting only when state or size changed.
+/// The generic backend keeps missed-resize recovery hermetically testable.
+fn draw_if_needed<B: Backend>(
+    terminal: &mut Terminal<B>,
+    controller: &mut Controller,
+    dirty: &mut bool,
+) -> Result<(), B::Error> {
+    // A split may resize after our first size query but before crossterm's first poll installs
+    // its SIGWINCH listener. No input then makes the frame dirty, so draw's autoresize would
+    // never run. Query only the backend size each tick (no tree walk or unconditional repaint).
+    *dirty |= terminal.size()? != terminal.get_frame().area().as_size();
+    if *dirty {
+        let mut need_redraw = false;
+        terminal.draw(|frame| {
+            controller.set_width(frame.area().width);
+            let view: ViewState = controller.view_state();
+            let viewports = presenter::draw(frame, &view);
+            // Feed the drawn content viewport back so content scrolling can be clamped to
+            // it on the next intent, and the hit-test geometry so a mouse event maps to the
+            // live layout. `true` means a deferred launch-open zoom just armed (narrow
+            // tree-only pane) and we must paint again so the file is actually visible.
+            need_redraw = controller.set_preview_viewports(viewports);
+            controller.set_pane_geometry(presenter::geometry(frame.area(), &view));
+        })?;
+        *dirty = need_redraw;
+    }
+    Ok(())
+}
+
 /// Draw (only when something changed), read one input (or time out), drain renders; repeat
 /// until the Close intent. Drawing only when `dirty` avoids re-walking the filesystem (the
-/// tree enumeration in `view_state`) on every idle tick.
+/// tree enumeration in `view_state`) on every idle tick. Backend size reconciliation also catches
+/// a startup resize whose notification arrived before input polling was initialized.
 fn event_loop(terminal: &mut DefaultTerminal, controller: &mut Controller) -> io::Result<()> {
     let mut dirty = true; // paint the first frame
+    let mut cwd_root = PathBuf::new();
     loop {
-        if dirty {
-            let mut need_redraw = false;
-            terminal.draw(|frame| {
-                controller.set_width(frame.area().width);
-                let view: ViewState = controller.view_state();
-                let viewports = presenter::draw(frame, &view);
-                // Feed the drawn content viewport back so content scrolling can be clamped to
-                // it on the next intent, and the hit-test geometry so a mouse event maps to the
-                // live layout. `true` means a deferred launch-open zoom just armed (narrow
-                // tree-only pane) and we must paint again so the file is actually visible.
-                need_redraw = controller.set_preview_viewports(viewports);
-                controller.set_pane_geometry(presenter::geometry(frame.area(), &view));
-            })?;
-            dirty = need_redraw;
-        }
+        follow_root(controller.root(), &mut cwd_root);
+        draw_if_needed(terminal, controller, &mut dirty)?;
 
         if event::poll(TICK)? {
             match event::read()? {
@@ -742,7 +783,7 @@ impl Spawner for ProcessSpawner {
         // A failed `Command::status` (e.g. the binary is not on PATH) is a launch failure —
         // the editor never ran. Map it through `NotLaunched` so the controller words the
         // notice as "could not open editor" rather than as an editor exit.
-        let status = Command::new(prog)
+        let status = crate::proc::in_launch_dir(&mut Command::new(prog))
             .args(args)
             .status()
             .map_err(SpawnError::NotLaunched)?;
@@ -777,7 +818,7 @@ impl Spawner for OpenerSpawner {
             .split_first()
             .ok_or_else(|| SpawnError::NotLaunched(io::Error::other("empty opener command")))?;
         // `spawn` (not `status`): launch and return immediately, never blocking the event loop.
-        let mut child = Command::new(prog)
+        let mut child = crate::proc::in_launch_dir(&mut Command::new(prog))
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -817,6 +858,23 @@ fn suspend_tui() -> io::Result<()> {
     let _ = execute!(io::stdout(), DisableFocusChange);
     disable_raw_mode()?;
     execute!(io::stdout(), LeaveAlternateScreen)
+}
+
+/// Choose the baseline for a fresh controller. An absent or invalid config value arrives as
+/// `None`, so the existing root-aware default remains authoritative.
+fn initial_baseline(default: Baseline, configured: Option<Baseline>) -> Baseline {
+    configured.unwrap_or(default)
+}
+
+/// Build the initial controller from the resolved root and settings. Keeping this seam pure over
+/// its injected components makes the config-to-controller baseline handoff directly testable.
+fn startup_controller(
+    resolved: root::Resolved,
+    eff: &crate::config::EffectiveSettings,
+    components: Components,
+) -> Controller {
+    let baseline = initial_baseline(git::default_baseline(&resolved), eff.baseline);
+    Controller::new_with_changed_file_view(resolved, baseline, components, eff.changed_file_view)
 }
 
 /// Re-enter raw mode + the alternate screen after the editor returns, and re-arm mouse capture
@@ -861,6 +919,7 @@ fn bundled_style_path(exe: Option<&Path>) -> Option<String> {
 /// config > `$EDITOR` > platform default.
 fn settings_wired(
     eff: &crate::config::EffectiveSettings,
+    baseline: Baseline,
     os: crate::opener::OsKind,
     platform_editor: Option<std::ffi::OsString>,
 ) -> crate::help::SettingsWired {
@@ -868,6 +927,7 @@ fn settings_wired(
         editor: crate::config::effective_editor(eff, platform_editor),
         open: crate::opener::default_opener_display(os, crate::opener::OpenAction::Open),
         reveal: crate::opener::default_opener_display(os, crate::opener::OpenAction::Reveal),
+        baseline,
     }
 }
 
@@ -913,6 +973,121 @@ fn default_renderers() -> Renderers {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missed_resize_notification_repaints_idle_layout_without_any_input() {
+        use ratatui::backend::TestBackend;
+        use ratatui::layout::Rect;
+
+        for (initial, resized) in [
+            ((133, 73), (131, 71)), // split's outer size -> actual inner size (host borders)
+            ((200, 24), (82, 20)),  // narrower/shorter
+            ((82, 20), (200, 24)),  // wider/taller
+            ((80, 24), (80, 36)),   // height-only change
+        ] {
+            let (mut controller, root) = route_controller("missed-startup-resize");
+            let mut terminal = Terminal::new(TestBackend::new(initial.0, initial.1)).unwrap();
+            let mut dirty = true;
+            draw_if_needed(&mut terminal, &mut controller, &mut dirty).unwrap();
+            assert!(!dirty, "the initial frame has no deferred zoom");
+
+            // Force the startup race clock-free: the backend changes AFTER the first draw, but
+            // no Event::Resize, focus event, worker result, or key marks the app dirty.
+            terminal.backend_mut().resize(resized.0, resized.1);
+            draw_if_needed(&mut terminal, &mut controller, &mut dirty).unwrap();
+            assert_eq!(
+                terminal.get_frame().area(),
+                Rect::new(0, 0, resized.0, resized.1),
+                "an idle tick must reconcile the actual terminal dimensions"
+            );
+            assert!(!dirty);
+
+            // Compare the COMPLETE rendered screen, including root header and bottom-right
+            // '? help', against a fresh frame at the final geometry, not just a dirty flag.
+            let view = controller.view_state();
+            let mut expected = Terminal::new(TestBackend::new(resized.0, resized.1)).unwrap();
+            expected
+                .draw(|frame| {
+                    presenter::draw(frame, &view);
+                })
+                .unwrap();
+            assert_eq!(terminal.backend().buffer(), expected.backend().buffer());
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[test]
+    fn unchanged_terminal_size_does_not_redraw_an_idle_frame() {
+        use ratatui::backend::TestBackend;
+
+        let (mut controller, root) = route_controller("idle-size-check");
+        let mut terminal = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        let mut dirty = true;
+        draw_if_needed(&mut terminal, &mut controller, &mut dirty).unwrap();
+        assert!(!dirty);
+        let frame_count = terminal.get_frame().count();
+        let render_seq = controller.render_seq();
+
+        for _ in 0..5 {
+            draw_if_needed(&mut terminal, &mut controller, &mut dirty).unwrap();
+        }
+        assert_eq!(
+            terminal.get_frame().count(),
+            frame_count,
+            "stable idle ticks must not draw or rebuild view_state"
+        );
+        assert_eq!(
+            controller.render_seq(),
+            render_seq,
+            "size polling must not dispatch renders"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn initial_baseline_uses_configured_value_or_preserves_the_context_default() {
+        assert_eq!(
+            initial_baseline(Baseline::Base, None),
+            Baseline::Base,
+            "an absent or invalid config value keeps the feature-branch default"
+        );
+        assert_eq!(
+            initial_baseline(Baseline::Head, None),
+            Baseline::Head,
+            "an absent or invalid config value keeps the default-branch default"
+        );
+        assert_eq!(
+            initial_baseline(Baseline::Base, Some(Baseline::Head)),
+            Baseline::Head
+        );
+        assert_eq!(
+            initial_baseline(Baseline::Head, Some(Baseline::Base)),
+            Baseline::Base
+        );
+    }
+
+    #[test]
+    fn configured_baseline_reaches_the_initial_controller() {
+        for (configured, expected) in [
+            (Some(" HEAD "), Baseline::Head),
+            (Some("base"), Baseline::Base),
+            (Some("unrecognized"), Baseline::Head),
+        ] {
+            let eff = crate::config::resolve(
+                &crate::config::Config {
+                    baseline: configured.map(str::to_owned),
+                    ..crate::config::Config::default()
+                },
+                |_| None,
+            );
+            let (controller, _root) = route_controller_with_settings("startup-baseline", &eff);
+            assert_eq!(
+                controller.baseline(),
+                expected,
+                "{configured:?} must flow from config through startup selection into Controller"
+            );
+        }
+    }
 
     // ---- resolve_editor: default-editor platform seam (AC-8, T-5) --------------
 
@@ -1010,6 +1185,14 @@ mod tests {
     }
 
     fn route_controller(tag: &str) -> (Controller, PathBuf) {
+        let eff = crate::config::resolve(&crate::config::Config::default(), |_| None);
+        route_controller_with_settings(tag, &eff)
+    }
+
+    fn route_controller_with_settings(
+        tag: &str,
+        eff: &crate::config::EffectiveSettings,
+    ) -> (Controller, PathBuf) {
         let root = tmp(tag);
         std::fs::write(root.join("note.rs"), "fn main() {}\n").unwrap();
         let resolved = crate::root::Resolved {
@@ -1019,9 +1202,9 @@ mod tests {
             is_worktree: false,
             base_branch: None,
         };
-        let controller = Controller::new(
+        let controller = startup_controller(
             resolved,
-            Baseline::Head,
+            eff,
             Components {
                 providers: Box::new(|_| RootProviders {
                     git: Arc::new(RouteGit),
@@ -1305,7 +1488,12 @@ mod tests {
             editor: Some(std::ffi::OsString::from("nvim")),
             ..crate::config::resolve(&crate::config::Config::default(), |_| None)
         };
-        let w = settings_wired(&eff, OsKind::Mac, Some(std::ffi::OsString::from("vi")));
+        let w = settings_wired(
+            &eff,
+            Baseline::Base,
+            OsKind::Mac,
+            Some(std::ffi::OsString::from("vi")),
+        );
         assert_eq!(
             w.editor,
             Some(std::ffi::OsString::from("nvim")),
@@ -1326,7 +1514,13 @@ mod tests {
 
         // No config editor: the platform default is what the row must report.
         let bare = crate::config::resolve(&crate::config::Config::default(), |_| None);
-        let w = settings_wired(&bare, OsKind::Linux, Some(std::ffi::OsString::from("vi")));
+        let w = settings_wired(
+            &bare,
+            Baseline::Head,
+            OsKind::Linux,
+            Some(std::ffi::OsString::from("vi")),
+        );
+        assert_eq!(w.baseline, Baseline::Head);
         assert_eq!(w.editor, Some(std::ffi::OsString::from("vi")));
     }
 

@@ -3,13 +3,16 @@
 [![CI](https://github.com/smarzban/herdr-file-viewer/actions/workflows/ci.yml/badge.svg)](https://github.com/smarzban/herdr-file-viewer/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Rust 1.96+](https://img.shields.io/badge/rust-1.96%2B-orange.svg)
-![herdr 0.7+](https://img.shields.io/badge/herdr-0.7%2B-8a2be2)
+![herdr 0.7.5+](https://img.shields.io/badge/herdr-0.7.5%2B-8a2be2)
 ![platforms: linux • macOS • Windows (preview)](https://img.shields.io/badge/platforms-linux%20%E2%80%A2%20macOS%20%E2%80%A2%20Windows%20(preview)-informational)
 
 **A git-aware, read-only file viewer in a herdr pane.** Tree on the left. On the right, the view
 that file deserves: a **diff** if it changed, **rendered markdown**, or **highlighted code**.
 Agents can drop you on a file or a line. You pin one file, mark a range, and paste those notes
 back into the chat. It never touches your files.
+
+> [!TIP]
+> Get **[tsk](https://github.com/smarzban/herdr-tsk)** to keep your work and your agents’ work on one board. TUI for you, CLI for them.
 
 ![herdr-file-viewer open in a herdr split beside your work: the directory tree on the left, syntax-highlighted content on the right](assets/File-viewer.png)
 
@@ -88,6 +91,18 @@ key = "prefix+shift+f"
 type = "plugin_action"
 command = "herdr-file-viewer.open-file-viewer-tab"
 description = "open file viewer in tab"
+
+[[keys.command]]
+key = "prefix+d"
+type = "plugin_action"
+command = "herdr-file-viewer.open-file-viewer-at"
+description = "open file viewer at… (split)"   # asks for a directory in a popup
+
+[[keys.command]]
+key = "prefix+alt+d"
+type = "plugin_action"
+command = "herdr-file-viewer.open-file-viewer-at-tab"
+description = "open file viewer at… (tab)"     # same popup, opens a new tab
 ```
 
 Run `herdr server reload-config`, then press your key. That's the whole setup: the split-pane
@@ -95,7 +110,8 @@ viewer and its open actions ship **inside** the plugin and register automaticall
 you only add the keybinding.
 
 Deeper detail lives in the docs: [install & updating](docs/install.md),
-[summoning the viewer](docs/summoning.md) (split vs. tab, the launcher, `--remote`),
+[summoning the viewer](docs/summoning.md) (split vs. tab, opening at another directory, the
+launcher, `--remote`),
 [external renderers](docs/renderers.md), and the [keys reference](docs/keys.md).
 
 ## Configuration
