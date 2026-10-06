@@ -3325,6 +3325,11 @@ impl Controller {
         self.modal.finder().is_some()
     }
 
+    /// Whether the open finder is still indexing or matching its current query.
+    pub fn finder_busy(&self) -> bool {
+        self.modal.finder().is_some_and(FinderState::busy)
+    }
+
     /// Whether the help overlay is currently open.
     pub fn help_open(&self) -> bool {
         self.modal.help().is_some()
@@ -3634,7 +3639,14 @@ impl Controller {
     /// dispatched selection (stale results are discarded). Returns `Some` redraw effect when
     /// fresh content was applied, so the run loop repaints; `None` when nothing arrived.
     pub fn poll(&mut self) -> Option<Effects> {
-        let mut applied = false;
+        let mut applied = self.modal.finder_mut().is_some_and(FinderState::poll);
+        if self
+            .modal
+            .finder_mut()
+            .is_some_and(FinderState::take_ready_confirm)
+        {
+            applied |= self.confirm_finder().redraw;
+        }
         while let Ok(completion) = self.result_rx.try_recv() {
             let RenderCompletion { job, result } = completion;
             let seq = job.seq;
@@ -4179,6 +4191,52 @@ mod tests {
             renderers: None,
         };
         (Controller::new(resolved, Baseline::Head, components), root)
+    }
+
+    /// Enter pressed while the finder is still indexing must be deferred, then honoured by
+    /// `Controller::poll` once that query's result lands. The worker is held at a gate, so the
+    /// finder is provably busy at Enter rather than racing to finish inside the keystroke.
+    #[test]
+    fn enter_before_the_finders_results_arrive_confirms_once_they_land() {
+        let (mut ctrl, _root) = open_target_controller();
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        ctrl.modal = Modal::Finder(FinderState::start_with(move |_| {
+            entered_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            Some(vec!["other.rs".into(), "src/deep/file.rs".into()])
+        }));
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap();
+
+        ctrl.handle_finder_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE));
+        let fx = ctrl.handle_finder_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(fx.redraw);
+        assert!(
+            ctrl.finder_busy(),
+            "precondition: Enter arrived before any result"
+        );
+        assert!(
+            ctrl.finder_open(),
+            "Enter while busy is deferred, not applied or dropped"
+        );
+
+        release_tx.send(()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while ctrl.finder_open() {
+            ctrl.poll();
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the deferred Enter never fired"
+            );
+            std::thread::yield_now();
+        }
+        let selected = ctrl
+            .tree
+            .selected()
+            .expect("the confirmed file is selected");
+        assert_eq!(selected.path.file_name().unwrap(), "other.rs");
     }
 
     #[test]

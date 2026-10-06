@@ -58,6 +58,18 @@ filter, `↑`/`↓` to move, `Enter` to open, and `Esc` to cancel. This is faste
 tree in a large repo. Confirming from a pinned preview moves focus to the active preview where the
 chosen file opens.
 
+The prompt opens immediately while a fresh index is built in the background, so you can type,
+backspace, or cancel straight away. A typical project shows results as you type. In a large
+directory the title shows `Indexing… N files`, then `Searching…` until the current query's
+results are ready. If you press `Enter` before they arrive, the first result of that query opens
+once ready; editing the query or pressing `Esc` cancels it, and a query with no matches keeps the
+finder open. Reopening the finder scans again, so newly created or removed files are reflected.
+
+The finder includes dotfiles regardless of the tree's `.` filter, honors `.gitignore`, and
+excludes `.git`. It does not prune caches or cap the number of files, so on a very large root
+(such as a home directory outside any Git repository) results appear only once the whole tree has
+been walked — the viewer stays responsive in the meantime.
+
 ## Open at a known file
 
 When an agent, companion plugin, or script knows the path and optional line, it can start the viewer

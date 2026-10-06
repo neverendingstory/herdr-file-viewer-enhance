@@ -60,6 +60,17 @@ pub fn build(root: &Path) -> Vec<String> {
 /// boundary when `is_git_repo` is true (see [`walk_builder`]) instead of letting it climb past
 /// an unrelated enclosing directory/repository above `root`.
 pub fn build_scoped(root: &Path, is_git_repo: bool) -> Vec<String> {
+    build_cancellable(root, is_git_repo, || false, |_| {}).unwrap_or_default()
+}
+
+/// Same visibility rules as the synchronous index, with cooperative cancellation and a
+/// progress callback. Neither callback changes the walk's scope or truncates its results.
+pub(crate) fn build_cancellable(
+    root: &Path,
+    is_git_repo: bool,
+    cancelled: impl Fn() -> bool,
+    progress: impl Fn(usize),
+) -> Option<Vec<String>> {
     let mut builder = walk_builder(root, is_git_repo);
     builder
         .hidden(false) // include dotfiles (AC-17 depends on the index NOT hiding dotfiles)
@@ -67,12 +78,23 @@ pub fn build_scoped(root: &Path, is_git_repo: bool) -> Vec<String> {
         .git_exclude(true)
         .filter_entry(|e| e.file_name() != ".git"); // prune entire .git subtree — AC-14
 
-    builder
-        .build()
-        .filter_map(Result::ok) // skip unreadable entries; traversal continues
-        .filter(|e| e.file_type().is_some_and(|t| t.is_file())) // files only — AC-15
-        .filter_map(|e| e.path().strip_prefix(root).ok().map(rel_to_slash))
-        .collect()
+    let mut paths = Vec::new();
+    for entry in builder.build() {
+        if cancelled() {
+            return None;
+        }
+        let Ok(entry) = entry else { continue };
+        if entry.file_type().is_some_and(|t| t.is_file())
+            && let Ok(rel) = entry.path().strip_prefix(root)
+        {
+            paths.push(rel_to_slash(rel));
+            if paths.len() % 128 == 0 {
+                progress(paths.len());
+            }
+        }
+    }
+    progress(paths.len());
+    Some(paths)
 }
 
 /// Render a root-relative path as a forward-slash string on every platform. The rest of the app
@@ -90,4 +112,61 @@ fn rel_to_slash(rel: &Path) -> String {
         })
         .collect::<Vec<_>>()
         .join("/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::{Cell, RefCell};
+
+    fn root_with_files(tag: &str, n: usize) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "hfv-index-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        for i in 0..n {
+            std::fs::write(root.join(format!("f{i:03}.rs")), "x").unwrap();
+        }
+        root
+    }
+
+    #[test]
+    fn cancellable_walk_reports_progress_every_128_files_and_at_the_end() {
+        let root = root_with_files("progress", 300);
+        let seen = RefCell::new(Vec::new());
+        let paths = build_cancellable(&root, false, || false, |n| seen.borrow_mut().push(n));
+        assert_eq!(paths.map(|p| p.len()), Some(300));
+        assert_eq!(*seen.borrow(), [128, 256, 300]);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn cancellable_walk_stops_partway_when_cancelled() {
+        let root = root_with_files("cancel", 300);
+        let checks = Cell::new(0);
+        let last_progress = Cell::new(0);
+        let paths = build_cancellable(
+            &root,
+            false,
+            || {
+                checks.set(checks.get() + 1);
+                checks.get() > 200
+            },
+            |n| last_progress.set(n),
+        );
+        assert!(
+            paths.is_none(),
+            "cancellation is not reported as a complete index"
+        );
+        assert_eq!(
+            checks.get(),
+            201,
+            "the walk stops at the first check that sees it"
+        );
+        assert!(last_progress.get() < 300, "the walk did not run to the end");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
