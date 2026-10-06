@@ -17,6 +17,7 @@ All notable changes to this project are documented here. The format is based on
 - Show committed branch changes (`M`/`A` and dirty-directory dots/colors) in the full tree from startup, without needing to toggle `c`. Baseline switches and refreshes also update the markers when the filter is off; `d` stays working-tree-only. → [usage](docs/usage.md#git-awareness)
 - Mouse selection now follows terminal cell width across full-width CJK text, including wrapped and horizontally-scrolled content. Thanks @nonhana (#143) → [usage](docs/usage.md#using-the-mouse)
 - Markdown code-block comments and generic subheadings now meet the WCAG 4.5:1 contrast minimum against the fixed code background. → [renderers](docs/renderers.md#bundled-markdown-palette)
+- Dismissing a project Spotlight with `u` now remembers it across launches instead of showing the same promotion every time. Changed spotlight titles/bodies can appear again; release notices remain session-only and What's New keeps all details. → [usage](docs/usage.md#staying-up-to-date)
 
 ### Changed
 - The binary-file placeholder now reads `[binary file: press O to open in the default app]`, pointing at the existing `O` hand-off instead of a dead end. Thanks @sftinc (#190) → [usage](docs/usage.md#handing-a-file-off)
