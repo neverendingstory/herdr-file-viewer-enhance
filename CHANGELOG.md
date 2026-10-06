@@ -9,6 +9,7 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 - Open the viewer at another directory: the `open-file-viewer-at` (split) and `open-file-viewer-at-tab` (tab) actions pop up a small prompt pre-filled with `~/` (the tab one names its tab `Files`). `Tab` completes directory and file names (ignoring case) and `↑`/`↓` pick from the matches, `Enter` opens the viewer there (a file opens in its directory, already shown), `Esc` cancels. Paths start from `~`, falling back to `/` when not found there, so system paths need no leading slash. Agents can do the same with `--env HERDR_FILE_VIEWER_ROOT=<dir>`. → [summoning](docs/summoning.md#open-at-another-directory)
+- `expand_changed`: open the tree's folders to files with uncommitted changes, at launch and whenever a refresh finds a newly changed file. A folder you collapse stays closed until a different file inside it changes. Off by default. Thanks @sftinc (#188) → [configuration](docs/configuration.md) · [usage](docs/usage.md#git-awareness)
 
 ### Fixed
 - The selected file stays selected when a file appears or disappears above it. A focus refresh or `r` used to move the highlight to a different file. Thanks @sftinc (#181)
