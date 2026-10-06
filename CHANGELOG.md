@@ -18,6 +18,7 @@ All notable changes to this project are documented here. The format is based on
 - Markdown code-block comments and generic subheadings now meet the WCAG 4.5:1 contrast minimum against the fixed code background. → [renderers](docs/renderers.md#bundled-markdown-palette)
 
 ### Changed
+- The binary-file placeholder now reads `[binary file: press O to open in the default app]`, pointing at the existing `O` hand-off instead of a dead end. Thanks @sftinc (#190) → [usage](docs/usage.md#handing-a-file-off)
 - The tab action (`prefix+shift+f`) now switches only to a viewer showing the repo you are in, so a viewer opened on another directory no longer captures it. To support this, a running viewer keeps its working directory on the root it shows (renderers, the editor and other tools it starts still run from the plugin directory). → [summoning](docs/summoning.md#open-in-a-tab-instead-of-a-split)
 - Requires herdr 0.7.5 or newer (popup support). → [install](docs/install.md)
 
