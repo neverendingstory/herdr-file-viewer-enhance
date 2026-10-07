@@ -8,7 +8,7 @@ use crate::repo_search::SearchHit;
 impl Controller {
     /// Open a fresh content-search modal using the ignored-file scope visible at this instant.
     pub(super) fn open_project_search(&mut self) -> Effects {
-        self.project_search_seq += 1; // invalidate a completion from an earlier modal instance
+        self.bump_project_search(); // invalidate a completion from an earlier modal instance
         self.modal = Modal::ProjectSearch(ProjectSearchState::new(self.show_ignored));
         self.last_click = None;
         Effects::redraw()
@@ -77,7 +77,7 @@ impl Controller {
             }
             KeyCode::Enter => self.confirm_project_search(),
             KeyCode::Esc => {
-                self.project_search_seq += 1;
+                self.bump_project_search(); // cancel the running scan
                 self.modal = Modal::None;
                 self.last_click = None;
                 Effects::redraw()
@@ -86,9 +86,26 @@ impl Controller {
         }
     }
 
-    fn dispatch_project_search(&mut self) {
+    /// Replace the content searcher and respawn the worker. A test seam, like
+    /// [`set_opener`](Controller::set_opener): tests inject a gated searcher to force ordering.
+    pub fn set_project_searcher(&mut self, searcher: crate::repo_search::Searcher) {
+        let (tx, rx) =
+            Self::spawn_project_search_worker(searcher, Arc::clone(&self.project_search_latest));
+        self.project_search_tx = tx; // dropping the old sender retires the old worker
+        self.project_search_rx = rx;
+    }
+
+    /// Advance the search sequence: completions for any earlier seq are dropped by `poll`, and the
+    /// worker's running scan sees it is superseded and stops.
+    pub(super) fn bump_project_search(&mut self) -> u64 {
         self.project_search_seq += 1;
-        let seq = self.project_search_seq;
+        self.project_search_latest
+            .store(self.project_search_seq, Ordering::Relaxed);
+        self.project_search_seq
+    }
+
+    fn dispatch_project_search(&mut self) {
+        let seq = self.bump_project_search();
         let Some(state) = self.modal.project_search() else {
             return;
         };
@@ -97,15 +114,17 @@ impl Controller {
         }
         let job = ProjectSearchJob {
             seq,
-            root: self.root.clone(),
-            query: state.query().to_string(),
-            is_git_repo: self.is_git_repo,
-            include_ignored: state.include_ignored(),
+            request: crate::repo_search::SearchRequest {
+                root: self.root.clone(),
+                query: state.query().to_string(),
+                is_git_repo: self.is_git_repo,
+                include_ignored: state.include_ignored(),
+            },
         };
         if self.project_search_tx.send(job).is_err()
             && let Some(state) = self.modal.project_search_mut()
         {
-            state.apply(crate::repo_search::SearchOutput::default());
+            state.apply(crate::repo_search::SearchOutput::default(), true);
         }
     }
 
@@ -119,7 +138,7 @@ impl Controller {
             return Effects::noop();
         };
 
-        self.project_search_seq += 1;
+        self.bump_project_search();
         self.modal = Modal::None;
         self.last_click = None;
         self.apply_open_target(&OpenTarget {

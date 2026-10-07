@@ -81,7 +81,7 @@ impl ProjectSearchState {
         } else if n == 0 {
             "No matches".to_string()
         } else if self.limited {
-            format!("First {n} matches")
+            format!("{n}+ matches")
         } else {
             count
         })
@@ -105,10 +105,12 @@ impl ProjectSearchState {
         self.searching = !self.prompt.query().is_empty();
     }
 
-    pub fn apply(&mut self, output: SearchOutput) {
+    /// Show a scan's hits: the cumulative partial result while it runs (`done == false`), or the
+    /// final one. Partial results only ever grow, so the selection stays on the same row.
+    pub fn apply(&mut self, output: SearchOutput, done: bool) {
         self.hits = output.hits;
         self.limited = output.limited;
-        self.searching = false;
+        self.searching = !done;
         self.cursor = self.cursor.min(self.hits.len().saturating_sub(1));
     }
 

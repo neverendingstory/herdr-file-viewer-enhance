@@ -13,10 +13,13 @@ fn hit(path: &str, line: usize) -> SearchHit {
 #[test]
 fn editing_clears_stale_results_and_marks_nonempty_query_searching() {
     let mut state = ProjectSearchState::new(false);
-    state.apply(SearchOutput {
-        hits: vec![hit("a.txt", 1)],
-        limited: true,
-    });
+    state.apply(
+        SearchOutput {
+            hits: vec![hit("a.txt", 1)],
+            limited: true,
+        },
+        true,
+    );
     state.move_selection(1);
     state.scroll_right();
 
@@ -45,10 +48,13 @@ fn deleting_back_to_empty_query_returns_to_idle() {
 fn applying_results_clears_loading_and_exposes_selected_hit() {
     let mut state = ProjectSearchState::new(false);
     state.push('x');
-    state.apply(SearchOutput {
-        hits: vec![hit("a.txt", 2), hit("b.txt", 4)],
-        limited: true,
-    });
+    state.apply(
+        SearchOutput {
+            hits: vec![hit("a.txt", 2), hit("b.txt", 4)],
+            limited: true,
+        },
+        true,
+    );
     state.move_selection(1);
 
     assert!(!state.searching());
@@ -62,10 +68,13 @@ fn applying_results_clears_loading_and_exposes_selected_hit() {
 #[test]
 fn selection_and_horizontal_scroll_are_clamped() {
     let mut state = ProjectSearchState::new(false);
-    state.apply(SearchOutput {
-        hits: vec![hit("a.txt", 1), hit("b.txt", 2)],
-        limited: false,
-    });
+    state.apply(
+        SearchOutput {
+            hits: vec![hit("a.txt", 1), hit("b.txt", 2)],
+            limited: false,
+        },
+        true,
+    );
 
     state.move_selection(99);
     assert_eq!(state.cursor(), 1);
@@ -78,4 +87,58 @@ fn selection_and_horizontal_scroll_are_clamped() {
     assert_eq!(state.hscroll(), 8);
     state.clamp_hscroll(3);
     assert_eq!(state.hscroll(), 3);
+}
+
+#[test]
+fn partial_results_keep_searching_and_preserve_the_selection() {
+    let mut state = ProjectSearchState::new(false);
+    state.push('n');
+    state.apply(
+        SearchOutput {
+            hits: vec![hit("a.txt", 1), hit("b.txt", 2)],
+            limited: false,
+        },
+        false,
+    );
+    state.move_selection(1);
+    assert!(state.searching());
+    assert_eq!(state.status().as_deref(), Some("Searching… 2 matches"));
+
+    // A later partial only appends, so the selected row is still the same hit.
+    state.apply(
+        SearchOutput {
+            hits: vec![hit("a.txt", 1), hit("b.txt", 2), hit("c.txt", 3)],
+            limited: false,
+        },
+        false,
+    );
+    assert_eq!(state.selected().map(|h| h.path.as_str()), Some("b.txt"));
+
+    state.apply(
+        SearchOutput {
+            hits: vec![hit("a.txt", 1), hit("b.txt", 2), hit("c.txt", 3)],
+            limited: false,
+        },
+        true,
+    );
+    assert!(!state.searching());
+    assert_eq!(state.status().as_deref(), Some("3 matches"));
+}
+
+#[test]
+fn status_reports_progress_then_outcome() {
+    let mut state = ProjectSearchState::new(false);
+    assert_eq!(state.status(), None, "no status before anything is typed");
+    state.push('n');
+    assert_eq!(state.status().as_deref(), Some("Searching…"));
+    state.apply(SearchOutput::default(), true);
+    assert_eq!(state.status().as_deref(), Some("No matches"));
+    state.apply(
+        SearchOutput {
+            hits: vec![hit("a.txt", 1)],
+            limited: true,
+        },
+        true,
+    );
+    assert_eq!(state.status().as_deref(), Some("1+ matches"));
 }

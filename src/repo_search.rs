@@ -3,11 +3,16 @@
 //! The scanner walks the viewer root with the same Git-ignore policy as the file index, reads only
 //! bounded UTF-8 text files, and returns one row per matching source line. It performs no writes and
 //! degrades by skipping files that disappear, cannot be read, look binary, or exceed the size cap.
+//! A scan checks its caller's cancellation probe between files and publishes the hits found so far
+//! at most every [`PUBLISH_INTERVAL`], so a superseded query stops early and a slow one shows
+//! results before it finishes.
 
 use crate::{index, search};
 use std::fs::File;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// Files larger than this are skipped rather than read into memory.
 pub const MAX_FILE_BYTES: u64 = 1024 * 1024;
@@ -15,6 +20,10 @@ pub const MAX_FILE_BYTES: u64 = 1024 * 1024;
 pub const MAX_RESULTS: usize = 500;
 /// Maximum excerpt body width in Unicode scalar values, excluding edge ellipses.
 pub const MAX_EXCERPT_CHARS: usize = 160;
+/// Minimum time between partial-result publishes from one running scan.
+pub const PUBLISH_INTERVAL: Duration = Duration::from_millis(50);
+/// The head of a file read first to spot a binary (NUL byte) before reading the rest.
+const SNIFF_BYTES: u64 = 8 * 1024;
 
 /// One matching source line under the current viewer root.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,53 +46,144 @@ pub struct SearchOutput {
     pub limited: bool,
 }
 
-/// Search text files under `root` using literal smartcase matching.
+/// One scan: the query and the scope it runs over.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SearchRequest {
+    pub root: PathBuf,
+    pub query: String,
+    /// Bounds the ancestor `.gitignore` search at the repository ([`index::walk_builder`]).
+    pub is_git_repo: bool,
+    /// Mirrors the tree's `i` toggle.
+    pub include_ignored: bool,
+}
+
+/// A running scan's link back to its caller.
+pub struct SearchControl<'a> {
+    /// Polled between files; once it returns `true` the scan stops and returns `None`.
+    pub cancelled: &'a dyn Fn() -> bool,
+    /// Receives the cumulative hits found so far while the scan is still running.
+    pub partial: &'a dyn Fn(&SearchOutput),
+}
+
+/// A content searcher. Production uses [`search_with`]; tests inject gated fakes through
+/// `Controller::set_project_searcher`. Returns `None` when cancelled.
+pub type Searcher =
+    Arc<dyn Fn(&SearchRequest, &SearchControl) -> Option<SearchOutput> + Send + Sync>;
+
+/// Search text files under `root` to completion, using literal smartcase matching.
 ///
 /// `include_ignored` mirrors the tree's `i` state and `is_git_repo` bounds the ancestor
 /// `.gitignore` search at the repository, exactly as the file index does ([`index::file_walk`]).
-/// The `.git` subtree is excluded in both modes. Results are deterministic because paths are
-/// sorted and lines are visited in source order.
+/// The `.git` subtree is excluded in both modes.
 pub fn search(root: &Path, query: &str, is_git_repo: bool, include_ignored: bool) -> SearchOutput {
-    if query.is_empty() {
-        return SearchOutput::default();
-    }
+    let request = SearchRequest {
+        root: root.to_path_buf(),
+        query: query.to_string(),
+        is_git_repo,
+        include_ignored,
+    };
+    let control = SearchControl {
+        cancelled: &|| false,
+        partial: &|_| {},
+    };
+    search_with(&request, &control).unwrap_or_default()
+}
 
-    let mut paths: Vec<String> = index::file_walk(root, is_git_repo, include_ignored)
-        .build()
-        .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_some_and(|t| t.is_file()))
-        .filter_map(|e| e.path().strip_prefix(root).ok().map(index::rel_to_slash))
-        .collect();
-    paths.sort();
-
+/// The production scan behind [`search`], with cancellation and partial results.
+///
+/// Files are visited in name order within each directory and lines in source order, so results
+/// are deterministic and a partial result is always a prefix of the final one.
+pub fn search_with(request: &SearchRequest, control: &SearchControl) -> Option<SearchOutput> {
     let mut output = SearchOutput::default();
-    for relative in paths {
-        let Some(text) = read_bounded_text(&root.join(&relative)) else {
+    if request.query.is_empty() {
+        return Some(output);
+    }
+    let (needle, case_sensitive) = search::smartcase_needle(&request.query);
+    let root = request.root.as_path();
+    let mut walk = index::file_walk(root, request.is_git_repo, request.include_ignored);
+    walk.sort_by_file_name(|a, b| a.cmp(b));
+
+    let mut published = 0;
+    let mut last_publish = Instant::now();
+    for entry in walk.build() {
+        if (control.cancelled)() {
+            return None;
+        }
+        let Ok(entry) = entry else { continue };
+        if !entry.file_type().is_some_and(|t| t.is_file())
+            || entry.metadata().is_ok_and(|m| m.len() > MAX_FILE_BYTES)
+        {
+            continue;
+        }
+        let Ok(relative) = entry.path().strip_prefix(root) else {
             continue;
         };
-        for (line_index, line) in text.lines().enumerate() {
-            let Some((start, end)) = search::first_match(query, line) else {
-                continue;
-            };
-            if output.hits.len() == MAX_RESULTS {
-                output.limited = true;
-                return output;
-            }
-            output.hits.push(SearchHit {
-                path: relative.clone(),
-                line: line_index + 1,
-                column: line[..start].chars().count() + 1,
-                excerpt: excerpt_around(line, start, end),
-            });
+        let Some(text) = read_bounded_text(entry.path()) else {
+            continue;
+        };
+        let relative = index::rel_to_slash(relative);
+        if scan_text(&relative, &text, &needle, case_sensitive, &mut output) {
+            return Some(output); // the result cap is reached; nothing more can be shown
+        }
+        if output.hits.len() > published && last_publish.elapsed() >= PUBLISH_INTERVAL {
+            (control.partial)(&output);
+            published = output.hits.len();
+            last_publish = Instant::now();
         }
     }
-    output
+    Some(output)
+}
+
+/// Append one hit per matching line of `text`. Returns `true` once [`MAX_RESULTS`] is exceeded.
+fn scan_text(
+    path: &str,
+    text: &str,
+    needle: &str,
+    case_sensitive: bool,
+    output: &mut SearchOutput,
+) -> bool {
+    // ASCII folding keeps byte offsets identical, so a hit in the folded copy indexes the original.
+    let folded;
+    let haystack = if case_sensitive {
+        text
+    } else {
+        folded = text.to_ascii_lowercase();
+        folded.as_str()
+    };
+    if !haystack.contains(needle) {
+        return false;
+    }
+    for (line_index, (line, folded_line)) in text.lines().zip(haystack.lines()).enumerate() {
+        let Some(start) = folded_line.find(needle) else {
+            continue;
+        };
+        if output.hits.len() == MAX_RESULTS {
+            output.limited = true;
+            return true;
+        }
+        output.hits.push(SearchHit {
+            path: path.to_string(),
+            line: line_index + 1,
+            column: line[..start].chars().count() + 1,
+            excerpt: excerpt_around(line, start, start + needle.len()),
+        });
+    }
+    false
 }
 
 fn read_bounded_text(path: &Path) -> Option<String> {
-    let file = File::open(path).ok()?;
+    let mut file = File::open(path).ok()?;
     let mut bytes = Vec::new();
-    file.take(MAX_FILE_BYTES + 1).read_to_end(&mut bytes).ok()?;
+    // Sniff the head first so a binary file costs one small read, not up to MAX_FILE_BYTES.
+    file.by_ref()
+        .take(SNIFF_BYTES)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.contains(&0) {
+        return None;
+    }
+    let rest = MAX_FILE_BYTES + 1 - bytes.len() as u64;
+    file.take(rest).read_to_end(&mut bytes).ok()?;
     if bytes.len() as u64 > MAX_FILE_BYTES || bytes.contains(&0) {
         return None;
     }

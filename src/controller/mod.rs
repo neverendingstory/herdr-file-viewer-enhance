@@ -69,6 +69,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::io;
 use std::panic::AssertUnwindSafe;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
@@ -597,15 +598,15 @@ struct RenderCompletion {
 /// modal opens/edits so a later re-root or filter change cannot silently change an in-flight scan.
 struct ProjectSearchJob {
     seq: u64,
-    root: PathBuf,
-    query: String,
-    is_git_repo: bool,
-    include_ignored: bool,
+    request: crate::repo_search::SearchRequest,
 }
 
+/// A project-content scan's result: the cumulative hits so far (`done == false`, streamed while the
+/// scan runs) or the final result (`done == true`).
 struct ProjectSearchCompletion {
     seq: u64,
     output: crate::repo_search::SearchOutput,
+    done: bool,
 }
 
 /// A re-root's off-thread git result: the working-tree status (tree markers, AC-7) and the
@@ -911,10 +912,13 @@ pub struct Controller {
     result_rx: mpsc::Receiver<RenderCompletion>,
     latest_seq: u64,
     /// Dedicated project-content search worker. Its sequence is bumped synchronously on every query
-    /// edit, so [`poll`](Self::poll) can discard results for a superseded query or closed modal.
+    /// edit, open, close, and re-root, so [`poll`](Self::poll) can discard results for a superseded
+    /// query or closed modal. `project_search_latest` mirrors the sequence for the worker, whose
+    /// running scan polls it between files and stops as soon as it is superseded.
     project_search_tx: mpsc::Sender<ProjectSearchJob>,
     project_search_rx: mpsc::Receiver<ProjectSearchCompletion>,
     project_search_seq: u64,
+    project_search_latest: Arc<AtomicU64>,
     /// The `seq` of an in-flight markdown re-render triggered by a content-pane *resize*
     /// ([`rerender_markdown_for_width`]), as opposed to a selection change. When [`poll`] applies a
     /// result whose seq matches, it preserves the current scroll and recomputes an active search
@@ -1085,7 +1089,11 @@ impl Controller {
         // channel (AC-23). The worker exits when the job sender (held by the controller) is
         // dropped — which is also how a re-root retires the old worker.
         let (job_tx, result_rx) = Self::spawn_worker(Arc::clone(&git), content);
-        let (project_search_tx, project_search_rx) = Self::spawn_project_search_worker();
+        let project_search_latest = Arc::new(AtomicU64::new(0));
+        let (project_search_tx, project_search_rx) = Self::spawn_project_search_worker(
+            Arc::new(crate::repo_search::search_with),
+            Arc::clone(&project_search_latest),
+        );
 
         let mut ctrl = Controller {
             tree: TreeModel::new(root.clone()),
@@ -1135,6 +1143,7 @@ impl Controller {
             project_search_tx,
             project_search_rx,
             project_search_seq: 0,
+            project_search_latest,
             reflow_seq: None,
             geom: PaneGeometry::default(),
             last_click: None,
@@ -1238,9 +1247,13 @@ impl Controller {
     }
 
     /// Spawn the single long-lived project-content search worker. It collapses queued edits to the
-    /// newest query before scanning, while sequence checks on the controller side discard a result
-    /// that was already running when a newer edit arrived.
-    fn spawn_project_search_worker() -> (
+    /// newest query before scanning and cancels a running scan once `latest` moves past its seq,
+    /// streaming partial hits while it runs. It never filters what it sends by seq: the controller's
+    /// `poll` guard alone decides which completion is current.
+    fn spawn_project_search_worker(
+        searcher: crate::repo_search::Searcher,
+        latest: Arc<AtomicU64>,
+    ) -> (
         mpsc::Sender<ProjectSearchJob>,
         mpsc::Receiver<ProjectSearchCompletion>,
     ) {
@@ -1251,19 +1264,34 @@ impl Controller {
                 while let Ok(newer) = job_rx.try_recv() {
                     job = newer;
                 }
-                let output = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                    crate::repo_search::search(
-                        &job.root,
-                        &job.query,
-                        job.is_git_repo,
-                        job.include_ignored,
-                    )
-                }))
-                .unwrap_or_default();
+                let seq = job.seq;
+                let cancelled = || latest.load(Ordering::Relaxed) != seq;
+                if cancelled() {
+                    continue;
+                }
+                let partial = |output: &crate::repo_search::SearchOutput| {
+                    let _ = result_tx.send(ProjectSearchCompletion {
+                        seq,
+                        output: output.clone(),
+                        done: false,
+                    });
+                };
+                let control = crate::repo_search::SearchControl {
+                    cancelled: &cancelled,
+                    partial: &partial,
+                };
+                let output = match std::panic::catch_unwind(AssertUnwindSafe(|| {
+                    searcher(&job.request, &control)
+                })) {
+                    Ok(Some(output)) => output,
+                    Ok(None) => continue, // cancelled: a newer job (or a close) superseded it
+                    Err(_) => crate::repo_search::SearchOutput::default(),
+                };
                 if result_tx
                     .send(ProjectSearchCompletion {
-                        seq: job.seq,
+                        seq,
                         output,
+                        done: true,
                     })
                     .is_err()
                 {
@@ -1394,6 +1422,7 @@ impl Controller {
         // future re-root trigger.
         self.modal = Modal::None;
         self.last_click = None;
+        self.bump_project_search(); // cancel a scan of the old root
 
         // PREFERENCES ARE CARRIED (AC-12) — deliberately NOT reset: show_ignored, hide_hidden,
         // changed_only, status_mode, changed_file_view, split_pct, tree_position, tree_max_cols,
@@ -3841,7 +3870,7 @@ impl Controller {
             if completion.seq == self.project_search_seq
                 && let Some(state) = self.modal.project_search_mut()
             {
-                state.apply(completion.output);
+                state.apply(completion.output, completion.done);
                 applied = true;
             }
         }

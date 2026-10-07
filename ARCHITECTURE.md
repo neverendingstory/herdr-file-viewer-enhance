@@ -44,7 +44,7 @@ is unit-testable with stubs.
 | `project_search` | Pure ephemeral project-content-search modal state: query, result rows, selection, horizontal scroll, captured ignored-file scope, and searching/limited status. No I/O. |
 | `fuzzy` | A pure fuzzy matcher: rank file paths against a typed query (the finder's scoring), no I/O. |
 | `index` | Build a deterministic flat list of root-relative file paths, honoring Git ignore/exclude rules unless explicitly asked to include ignored files and always excluding `.git/`; shared by the file finder and project-content scanner. |
-| `repo_search` | Bounded synchronous project-content scanner (run only on its worker): literal smartcase matching, one result per source line, 1 MiB/file and 500-result caps, and defensive skipping of NUL-bearing, invalid-UTF-8, unreadable, or vanished files. |
+| `repo_search` | Bounded project-content scanner (run only on its worker): walks with the file index's policy (`index::file_walk`, so the same repo-bounded `.gitignore` rules and `i` scope), literal smartcase matching (the `search::smartcase_needle` rule `/` uses), one result per source line, 1 MiB/file and 500-result caps, and defensive skipping of NUL-bearing, invalid-UTF-8, unreadable, or vanished files. Polls a cancellation probe between files and publishes cumulative partial hits at most every 50 ms. |
 | `search` | Pure literal smartcase matching primitives shared by in-file and project-content search; in-file search returns every byte-offset match range in displayed document order, while the scanner asks for the first match on each source line. Never a regex; no I/O. |
 | `highlight` | Overlay match highlighting onto the content pane: re-segment each line's spans at the match byte boundaries and patch a highlight style over the matched runs, with a distinct style on the current match. Pure; composes over the delegated render rather than re-rendering. |
 | `text_layout` | A pure text-wrapping helper: how many display rows a line occupies at a given width, shared by the content pane, the finder, and the help overlay. No I/O. |
@@ -89,8 +89,11 @@ A renderer panic is contained (`catch_unwind`) so the worker survives. No `tokio
 **Project-content scanning is off the input thread too.** Each nonempty `s`-popup query dispatches a
 job containing the root, query, and ignored-file scope captured when the popup opened. One long-lived
 `std::thread` worker collapses queued queries to the newest, runs the bounded `repo_search` scan, and
-sends typed results back over `mpsc`; `Controller::poll()` applies only the current sequence while the
-modal is still open. Editing to empty, closing, or reopening invalidates older work. A scanner panic
+sends typed results back over `mpsc`, streaming partial hits while it runs. Every edit, open, close,
+and re-root bumps a sequence the worker shares through an atomic, so a superseded scan stops at the
+next file; `Controller::poll()` independently applies only the current sequence while the modal is
+still open. The scanner is injectable (`Controller::set_project_searcher`) so tests can hold a scan
+open and force a stale completion. A scanner panic
 is contained, and confirming a result goes through the same `open_target` reveal/source-line path as
 launch-time targets.
 

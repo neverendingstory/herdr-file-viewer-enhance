@@ -8,12 +8,14 @@ use herdr_file_viewer::controller::{
 };
 use herdr_file_viewer::git::{Baseline, Status};
 use herdr_file_viewer::intent::Intent;
-use herdr_file_viewer::repo_search::SearchHit;
+use herdr_file_viewer::repo_search::{
+    SearchControl, SearchHit, SearchOutput, SearchRequest, Searcher,
+};
 use herdr_file_viewer::view_policy::ViewMode;
 use ratatui::text::Text;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 #[derive(Default)]
@@ -169,4 +171,188 @@ fn enter_opens_the_selected_result_in_source_view_at_its_line() {
         selected.path.file_name().and_then(|name| name.to_str()),
         Some("target.md")
     );
+}
+
+// ── Worker ordering, cancellation and streaming (gated searchers) ─────────────────────────────
+//
+// These inject a searcher through `Controller::set_project_searcher` so the test decides when each
+// scan starts and ends, instead of hoping a real walk happens to race. Every wait is a bounded
+// `recv_timeout` on a signal the searcher sends, never a sleep.
+
+const SIGNAL_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn hit(path: &str, line: usize) -> SearchHit {
+    SearchHit {
+        path: path.into(),
+        line,
+        column: 1,
+        excerpt: "needle".into(),
+    }
+}
+
+fn status(controller: &Controller) -> Option<String> {
+    controller.view_state().finder.and_then(|f| f.status)
+}
+
+/// A searcher that reports each scan's query on `started`, then blocks until the test sends on
+/// `release`. It ignores cancellation and returns one hit named after its query, so a superseded
+/// scan still produces a (stale) completion the controller must discard.
+fn gated_searcher() -> (Searcher, mpsc::Receiver<String>, mpsc::Sender<()>) {
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let release_rx = Mutex::new(release_rx);
+    let searcher: Searcher = Arc::new(move |req: &SearchRequest, _: &SearchControl| {
+        started_tx.send(req.query.clone()).unwrap();
+        release_rx
+            .lock()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(30))
+            .expect("the test releases every scan it starts");
+        Some(SearchOutput {
+            hits: vec![hit(&format!("{}.txt", req.query), 1)],
+            limited: false,
+        })
+    });
+    (searcher, started_rx, release_tx)
+}
+
+#[test]
+fn a_superseded_scan_result_is_never_applied() {
+    let tmp = TempDir::new();
+    let mut controller = controller(tmp.path());
+    let (searcher, started, release) = gated_searcher();
+    controller.set_project_searcher(searcher);
+
+    controller.handle(Intent::OpenProjectSearch);
+    type_query(&mut controller, "a");
+    assert_eq!(started.recv_timeout(SIGNAL_TIMEOUT).unwrap(), "a");
+
+    // Dispatch "ab" while "a" is still held open, then let "a" finish with its stale result.
+    type_query(&mut controller, "b");
+    release.send(()).unwrap();
+    // The single worker only starts "ab" after it has sent "a"'s completion, so that completion
+    // is already waiting in the channel: this poll must see it and drop it.
+    assert_eq!(started.recv_timeout(SIGNAL_TIMEOUT).unwrap(), "ab");
+    controller.poll();
+    assert_eq!(
+        controller.project_search_hits(),
+        Some(&[][..]),
+        "the superseded \"a\" scan's rows must not be shown for the query \"ab\""
+    );
+    assert_eq!(status(&controller).as_deref(), Some("Searching…"));
+
+    release.send(()).unwrap();
+    let hits = await_hits(&mut controller);
+    assert_eq!(hits, vec![hit("ab.txt", 1)]);
+}
+
+#[test]
+fn a_result_arriving_after_esc_does_not_reopen_or_fill_the_search() {
+    let tmp = TempDir::new();
+    let mut controller = controller(tmp.path());
+    let (searcher, started, release) = gated_searcher();
+    controller.set_project_searcher(searcher);
+
+    controller.handle(Intent::OpenProjectSearch);
+    type_query(&mut controller, "a");
+    assert_eq!(started.recv_timeout(SIGNAL_TIMEOUT).unwrap(), "a");
+    controller.handle_project_search_key(key(KeyCode::Esc));
+    controller.handle(Intent::OpenProjectSearch);
+    release.send(()).unwrap();
+
+    // Prove the late completion has been sent: the next scan only starts after it.
+    type_query(&mut controller, "z");
+    assert_eq!(started.recv_timeout(SIGNAL_TIMEOUT).unwrap(), "z");
+    controller.poll();
+    assert_eq!(controller.project_search_hits(), Some(&[][..]));
+    release.send(()).unwrap();
+    assert_eq!(await_hits(&mut controller), vec![hit("z.txt", 1)]);
+}
+
+#[test]
+fn editing_or_closing_cancels_the_running_scan() {
+    let tmp = TempDir::new();
+    let mut controller = controller(tmp.path());
+    let (started_tx, started) = mpsc::channel();
+    let (outcome_tx, outcome) = mpsc::channel();
+    // Spins until the controller cancels it (bounded, so a missing cancel fails instead of hangs).
+    let searcher: Searcher = Arc::new(move |req: &SearchRequest, ctl: &SearchControl| {
+        started_tx.send(req.query.clone()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !(ctl.cancelled)() && Instant::now() < deadline {
+            std::thread::yield_now();
+        }
+        outcome_tx
+            .send((req.query.clone(), (ctl.cancelled)()))
+            .unwrap();
+        None
+    });
+    controller.set_project_searcher(searcher);
+
+    controller.handle(Intent::OpenProjectSearch);
+    type_query(&mut controller, "a");
+    assert_eq!(started.recv_timeout(SIGNAL_TIMEOUT).unwrap(), "a");
+    type_query(&mut controller, "b");
+    assert_eq!(
+        outcome.recv_timeout(SIGNAL_TIMEOUT).unwrap(),
+        ("a".to_string(), true),
+        "typing past a query cancels its scan"
+    );
+
+    assert_eq!(started.recv_timeout(SIGNAL_TIMEOUT).unwrap(), "ab");
+    controller.handle_project_search_key(key(KeyCode::Esc));
+    assert_eq!(
+        outcome.recv_timeout(SIGNAL_TIMEOUT).unwrap(),
+        ("ab".to_string(), true),
+        "Esc cancels the running scan"
+    );
+}
+
+#[test]
+fn partial_results_show_while_the_scan_is_still_running() {
+    let tmp = TempDir::new();
+    let mut controller = controller(tmp.path());
+    let (started_tx, started) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel::<()>();
+    let release_rx = Mutex::new(release_rx);
+    let searcher: Searcher = Arc::new(move |_: &SearchRequest, ctl: &SearchControl| {
+        (ctl.partial)(&SearchOutput {
+            hits: vec![hit("a.txt", 1)],
+            limited: false,
+        });
+        started_tx.send(()).unwrap();
+        release_rx
+            .lock()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(30))
+            .expect("the test releases the scan");
+        Some(SearchOutput {
+            hits: vec![hit("a.txt", 1), hit("b.txt", 2)],
+            limited: false,
+        })
+    });
+    controller.set_project_searcher(searcher);
+
+    controller.handle(Intent::OpenProjectSearch);
+    type_query(&mut controller, "n");
+    started.recv_timeout(SIGNAL_TIMEOUT).unwrap();
+    // The partial was sent before `started`, so one poll applies it.
+    controller.poll();
+    assert_eq!(
+        controller.project_search_hits(),
+        Some(&[hit("a.txt", 1)][..])
+    );
+    assert_eq!(status(&controller).as_deref(), Some("Searching… 1 match"));
+
+    release_tx.send(()).unwrap();
+    let deadline = Instant::now() + SIGNAL_TIMEOUT;
+    while controller
+        .project_search_hits()
+        .is_some_and(|h| h.len() < 2)
+    {
+        controller.poll();
+        assert!(Instant::now() < deadline, "the final result did not arrive");
+        std::thread::yield_now();
+    }
+    assert_eq!(status(&controller).as_deref(), Some("2 matches"));
 }

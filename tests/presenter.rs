@@ -2851,7 +2851,7 @@ fn project_search_renders_status_chip_scope_and_selected_row() {
     assert!(empty.contains("No matches"), "{empty}");
 
     let rows = project(
-        "First 500 matches",
+        "500+ matches",
         vec![
             "src/app.rs:42  fn needle()".into(),
             "src/lib.rs:7  mod needle;".into(),
@@ -2860,7 +2860,7 @@ fn project_search_renders_status_chip_scope_and_selected_row() {
     );
     let out = render(&rows, 100, 24);
     assert!(out.contains("src/app.rs:42  fn needle()"), "{out}");
-    assert!(out.contains("First 500 matches"), "{out}");
+    assert!(out.contains("500+ matches"), "{out}");
     insta::assert_snapshot!("presenter_project_search_results", out);
 
     let buf = render_buffer(&rows, 100, 24);

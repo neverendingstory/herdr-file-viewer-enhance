@@ -72,8 +72,10 @@ been walked — the viewer stays responsive in the meantime.
 
 ### Searching file contents
 
-Press `s` when you know text **inside** a file instead. It searches off-thread and reports one row
-per matching source line as `path:line  excerpt`; `↑`/`↓` select a row, `←`/`→` scroll long rows,
+Press `s` when you know text **inside** a file instead. It searches in the background and reports
+one row per matching source line as `path:line  excerpt`. Rows appear as they are found, with the
+running count in the popup's top-right corner, and typing more or pressing `Esc` stops the search
+in progress; `↑`/`↓` select a row, `←`/`→` scroll long rows,
 `Enter` opens that file in source view at the line, and `Esc` leaves the prior selection unchanged.
 The query is literal smartcase, like `/`: all-lowercase ASCII is case-insensitive, while any ASCII
 capital makes it case-sensitive.
