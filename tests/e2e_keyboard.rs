@@ -160,6 +160,9 @@ fn project_search_reports_path_and_line_then_enter_jumps_to_the_source_line() {
     s.expect("zz_target.txt:40")
         .expect("the result row reports the root-relative path and one-based source line");
 
+    // Every prefix of the query also matches line 40, so the row above may come from an
+    // intermediate query whose hits the next key cleared. That is safe: Enter pressed before the
+    // full query's result lands is held and opens its first hit on arrival.
     // LANDINGMARK is on the next source line and is absent from the one-line result excerpt. It is
     // initially off-screen, so its first appearance proves Enter revealed the file and jumped to
     // the matching line rather than merely opening the file at its top.

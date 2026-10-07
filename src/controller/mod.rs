@@ -3866,13 +3866,18 @@ impl Controller {
         // Apply only the newest project-search completion while that exact modal instance remains
         // open. Query edits and close/reopen both bump the sequence synchronously, so an older scan
         // can never overwrite newer rows or resurrect a closed search.
+        let mut confirm_project_search = false;
         while let Ok(completion) = self.project_search_rx.try_recv() {
             if completion.seq == self.project_search_seq
                 && let Some(state) = self.modal.project_search_mut()
             {
                 state.apply(completion.output, completion.done);
+                confirm_project_search |= state.take_pending_confirm() == Some(true);
                 applied = true;
             }
+        }
+        if confirm_project_search {
+            self.confirm_project_search();
         }
         // A re-root's off-thread status/changed-set (one-shot, AC-17): apply the new root's
         // markers and the carried changed-only filter against the freshly-arrived changed-set,

@@ -94,6 +94,15 @@ pub fn search(root: &Path, query: &str, is_git_repo: bool, include_ignored: bool
 /// Files are visited in name order within each directory and lines in source order, so results
 /// are deterministic and a partial result is always a prefix of the final one.
 pub fn search_with(request: &SearchRequest, control: &SearchControl) -> Option<SearchOutput> {
+    scan(request, control, PUBLISH_INTERVAL)
+}
+
+/// [`search_with`] with an explicit publish interval, so a unit test can force every publish.
+fn scan(
+    request: &SearchRequest,
+    control: &SearchControl,
+    publish_interval: Duration,
+) -> Option<SearchOutput> {
     let mut output = SearchOutput::default();
     if request.query.is_empty() {
         return Some(output);
@@ -108,6 +117,13 @@ pub fn search_with(request: &SearchRequest, control: &SearchControl) -> Option<S
     for entry in walk.build() {
         if (control.cancelled)() {
             return None;
+        }
+        // Publish at the top of every step, so hits found earlier still surface while the walk
+        // skips a long run of binary, oversized, or unreadable entries.
+        if output.hits.len() > published && last_publish.elapsed() >= publish_interval {
+            (control.partial)(&output);
+            published = output.hits.len();
+            last_publish = Instant::now();
         }
         let Ok(entry) = entry else { continue };
         if !entry.file_type().is_some_and(|t| t.is_file())
@@ -124,11 +140,6 @@ pub fn search_with(request: &SearchRequest, control: &SearchControl) -> Option<S
         let relative = index::rel_to_slash(relative);
         if scan_text(&relative, &text, &needle, case_sensitive, &mut output) {
             return Some(output); // the result cap is reached; nothing more can be shown
-        }
-        if output.hits.len() > published && last_publish.elapsed() >= PUBLISH_INTERVAL {
-            (control.partial)(&output);
-            published = output.hits.len();
-            last_publish = Instant::now();
         }
     }
     Some(output)
@@ -234,5 +245,47 @@ mod tests {
         let start = "prefix ".len();
         let excerpt = excerpt_around(&line, start, start + query.len());
         assert!(excerpt.contains(&query));
+    }
+
+    /// The real scanner streams: with the interval forced to zero it publishes after each matching
+    /// file, every partial is a strict prefix of the final result, and a binary entry between two
+    /// matches does not hold back the earlier hit.
+    #[test]
+    fn the_scanner_publishes_growing_prefixes_of_its_final_result() {
+        let root = std::env::temp_dir().join(format!(
+            "hfv-repo-search-stream-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("a.txt"), "needle\n").unwrap();
+        std::fs::write(root.join("b.bin"), b"\0binary").unwrap();
+        std::fs::write(root.join("c.txt"), "needle\n").unwrap();
+        std::fs::write(root.join("d.txt"), "needle\n").unwrap();
+
+        let request = SearchRequest {
+            root: root.clone(),
+            query: "needle".into(),
+            is_git_repo: false,
+            include_ignored: false,
+        };
+        let partials = std::sync::Mutex::new(Vec::new());
+        let partial = |out: &SearchOutput| partials.lock().unwrap().push(out.hits.clone());
+        let control = SearchControl {
+            cancelled: &|| false,
+            partial: &partial,
+        };
+        let final_hits = scan(&request, &control, Duration::ZERO).unwrap().hits;
+        let _ = std::fs::remove_dir_all(&root);
+
+        let paths = |hits: &[SearchHit]| hits.iter().map(|h| h.path.clone()).collect::<Vec<_>>();
+        assert_eq!(paths(&final_hits), ["a.txt", "c.txt", "d.txt"]);
+        let partials = partials.into_inner().unwrap();
+        assert_eq!(
+            partials.iter().map(|p| paths(p)).collect::<Vec<_>>(),
+            [vec!["a.txt"], vec!["a.txt", "c.txt"]],
+            "a.txt surfaces at the binary entry, c.txt at d.txt; d.txt arrives with the final result"
+        );
     }
 }

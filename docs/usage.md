@@ -76,7 +76,8 @@ Press `s` when you know text **inside** a file instead. It searches in the backg
 one row per matching source line as `path:line  excerpt`. Rows appear as they are found, with the
 running count in the popup's top-right corner, and typing more or pressing `Esc` stops the search
 in progress; `↑`/`↓` select a row, `←`/`→` scroll long rows,
-`Enter` opens that file in source view at the line, and `Esc` leaves the prior selection unchanged.
+`Enter` opens that file in source view at the line (pressed before any result has arrived, it opens
+the first one once it does), and `Esc` leaves the prior selection unchanged.
 The query is literal smartcase, like `/`: all-lowercase ASCII is case-insensitive, while any ASCII
 capital makes it case-sensitive.
 

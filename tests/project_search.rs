@@ -61,6 +61,10 @@ impl EditorHandoff for NoopEditor {
 }
 
 fn controller(root: &Path) -> Controller {
+    controller_with_git(root, false)
+}
+
+fn controller_with_git(root: &Path, is_git_repo: bool) -> Controller {
     let components = Components {
         providers: Box::new(|_resolved| RootProviders {
             git: Arc::new(StubGit),
@@ -71,7 +75,7 @@ fn controller(root: &Path) -> Controller {
         renderers: None,
     };
     Controller::new(
-        common::resolved(root.to_path_buf(), false),
+        common::resolved(root.to_path_buf(), is_git_repo),
         Baseline::Head,
         components,
     )
@@ -87,11 +91,16 @@ fn type_query(controller: &mut Controller, query: &str) {
     }
 }
 
+/// Poll until the current query's scan has FINISHED with at least one hit. Results stream, so a
+/// non-empty hit list alone may be a partial; the status chip leaves "Searching…" only once the
+/// final completion is applied.
 fn await_hits(controller: &mut Controller) -> Vec<SearchHit> {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         controller.poll();
-        if let Some(hits) = controller.project_search_hits()
+        let done = status(controller).is_some_and(|s| !s.starts_with("Searching"));
+        if done
+            && let Some(hits) = controller.project_search_hits()
             && !hits.is_empty()
         {
             return hits.to_vec();
@@ -99,6 +108,10 @@ fn await_hits(controller: &mut Controller) -> Vec<SearchHit> {
         assert!(Instant::now() < deadline, "project search did not finish");
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+fn status(controller: &Controller) -> Option<String> {
+    controller.view_state().finder.and_then(|f| f.status)
 }
 
 #[test]
@@ -188,10 +201,6 @@ fn hit(path: &str, line: usize) -> SearchHit {
         column: 1,
         excerpt: "needle".into(),
     }
-}
-
-fn status(controller: &Controller) -> Option<String> {
-    controller.view_state().finder.and_then(|f| f.status)
 }
 
 /// A searcher that reports each scan's query on `started`, then blocks until the test sends on
@@ -355,4 +364,75 @@ fn partial_results_show_while_the_scan_is_still_running() {
         std::thread::yield_now();
     }
     assert_eq!(status(&controller).as_deref(), Some("2 matches"));
+}
+
+/// The controller hands its resolved git-repo flag to every scan, so content search bounds the
+/// ancestor `.gitignore` search exactly like the tree and Go-to-file (the scanner side is covered
+/// in `tests/repo_search.rs`).
+#[test]
+fn scans_carry_the_roots_git_repo_flag() {
+    for is_git_repo in [true, false] {
+        let tmp = TempDir::new();
+        let mut controller = controller_with_git(tmp.path(), is_git_repo);
+        let (seen_tx, seen) = mpsc::channel();
+        controller.set_project_searcher(Arc::new(move |req: &SearchRequest, _: &SearchControl| {
+            seen_tx.send(req.is_git_repo).unwrap();
+            Some(SearchOutput::default())
+        }));
+
+        controller.handle(Intent::OpenProjectSearch);
+        type_query(&mut controller, "a");
+        assert_eq!(seen.recv_timeout(SIGNAL_TIMEOUT).unwrap(), is_git_repo);
+    }
+}
+
+/// Enter pressed before the current query has any result is held, not dropped: the first hit
+/// opens when it arrives. Editing the query discards the held Enter.
+#[test]
+fn an_early_enter_opens_the_first_result_once_it_arrives() {
+    let tmp = TempDir::new();
+    std::fs::write(tmp.path().join("ab.txt"), "needle\n").unwrap();
+    let mut controller = controller(tmp.path());
+    let (searcher, started, release) = gated_searcher();
+    controller.set_project_searcher(searcher);
+
+    controller.handle(Intent::OpenProjectSearch);
+    type_query(&mut controller, "a");
+    assert_eq!(started.recv_timeout(SIGNAL_TIMEOUT).unwrap(), "a");
+    controller.handle_project_search_key(key(KeyCode::Enter));
+    assert!(
+        controller.project_search_open(),
+        "no result yet: Enter waits"
+    );
+
+    // Editing drops the held Enter: "ab"'s result is shown, not opened.
+    type_query(&mut controller, "b");
+    release.send(()).unwrap();
+    assert_eq!(started.recv_timeout(SIGNAL_TIMEOUT).unwrap(), "ab");
+    release.send(()).unwrap();
+    assert_eq!(await_hits(&mut controller), vec![hit("ab.txt", 1)]);
+    assert!(controller.project_search_open());
+
+    // A fresh query with Enter pressed early opens its first hit on arrival.
+    controller.handle_project_search_key(key(KeyCode::Backspace));
+    assert_eq!(started.recv_timeout(SIGNAL_TIMEOUT).unwrap(), "a");
+    type_query(&mut controller, "b");
+    controller.handle_project_search_key(key(KeyCode::Enter));
+    release.send(()).unwrap(); // the stale "a" scan
+    assert_eq!(started.recv_timeout(SIGNAL_TIMEOUT).unwrap(), "ab");
+    release.send(()).unwrap();
+    let deadline = Instant::now() + SIGNAL_TIMEOUT;
+    while controller.project_search_open() {
+        controller.poll();
+        assert!(
+            Instant::now() < deadline,
+            "the held Enter never opened the result"
+        );
+        std::thread::yield_now();
+    }
+    let selected = controller.tree().selected().expect("result selected");
+    assert_eq!(
+        selected.path.file_name().and_then(|n| n.to_str()),
+        Some("ab.txt")
+    );
 }

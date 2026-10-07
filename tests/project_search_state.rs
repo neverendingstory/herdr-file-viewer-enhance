@@ -142,3 +142,47 @@ fn status_reports_progress_then_outcome() {
     );
     assert_eq!(state.status().as_deref(), Some("1+ matches"));
 }
+
+#[test]
+fn a_held_enter_resolves_on_the_first_hit_or_an_empty_finish() {
+    let mut state = ProjectSearchState::new(false);
+    assert!(
+        !state.request_confirm(),
+        "nothing typed: nothing to wait for"
+    );
+    state.push('n');
+    assert!(state.request_confirm());
+    assert_eq!(state.take_pending_confirm(), None, "still searching");
+    state.apply(SearchOutput::default(), true);
+    assert_eq!(
+        state.take_pending_confirm(),
+        Some(false),
+        "finished empty: drop it"
+    );
+
+    state.push('e');
+    assert!(state.request_confirm());
+    state.apply(
+        SearchOutput {
+            hits: vec![hit("a.txt", 1)],
+            limited: false,
+        },
+        false,
+    );
+    assert_eq!(
+        state.take_pending_confirm(),
+        Some(true),
+        "a partial hit is enough"
+    );
+    assert_eq!(state.take_pending_confirm(), None, "resolved once");
+
+    state.push('x');
+    assert!(state.request_confirm());
+    state.push('y');
+    state.apply(SearchOutput::default(), true);
+    assert_eq!(
+        state.take_pending_confirm(),
+        None,
+        "an edit discards the held Enter"
+    );
+}

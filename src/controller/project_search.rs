@@ -128,13 +128,19 @@ impl Controller {
         }
     }
 
-    fn confirm_project_search(&mut self) -> Effects {
+    /// Open the selected hit. Pressed before the current query has any result, Enter is held and
+    /// resolved by [`poll`](Controller::poll) once the first hit (or an empty finish) arrives, like
+    /// Go-to-file, so a fast typist's Enter is not silently lost.
+    pub(super) fn confirm_project_search(&mut self) -> Effects {
         let Some(hit) = self
             .modal
             .project_search()
             .and_then(ProjectSearchState::selected)
             .cloned()
         else {
+            if let Some(state) = self.modal.project_search_mut() {
+                state.request_confirm();
+            }
             return Effects::noop();
         };
 

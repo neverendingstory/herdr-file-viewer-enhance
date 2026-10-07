@@ -17,6 +17,8 @@ pub struct ProjectSearchState {
     searching: bool,
     limited: bool,
     include_ignored: bool,
+    /// Enter was pressed before the current query had any result; open its first hit on arrival.
+    confirm_pending: bool,
 }
 
 impl ProjectSearchState {
@@ -29,6 +31,7 @@ impl ProjectSearchState {
             searching: false,
             limited: false,
             include_ignored,
+            confirm_pending: false,
         }
     }
 
@@ -102,6 +105,7 @@ impl ProjectSearchState {
         self.cursor = 0;
         self.hscroll = 0;
         self.limited = false;
+        self.confirm_pending = false;
         self.searching = !self.prompt.query().is_empty();
     }
 
@@ -121,6 +125,23 @@ impl ProjectSearchState {
         }
         let max = self.hits.len() as isize - 1;
         self.cursor = (self.cursor as isize + delta).clamp(0, max) as usize;
+    }
+
+    /// Remember an Enter pressed while the current query is still searching with no hits yet.
+    /// Returns whether it was recorded (a finished or empty query has nothing to wait for).
+    pub fn request_confirm(&mut self) -> bool {
+        self.confirm_pending = self.searching && self.hits.is_empty();
+        self.confirm_pending
+    }
+
+    /// Whether a pending Enter should now resolve: a hit has arrived to open, or the scan
+    /// finished with none (the pending Enter is then dropped and the popup stays open).
+    pub fn take_pending_confirm(&mut self) -> Option<bool> {
+        if !self.confirm_pending || (self.hits.is_empty() && self.searching) {
+            return None;
+        }
+        self.confirm_pending = false;
+        Some(!self.hits.is_empty())
     }
 
     pub fn selected(&self) -> Option<&SearchHit> {
