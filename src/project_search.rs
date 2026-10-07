@@ -60,6 +60,33 @@ impl ProjectSearchState {
         self.include_ignored
     }
 
+    /// The popup's top-right status chip: progress while a scan runs, then the outcome. `None`
+    /// before anything has been typed.
+    pub fn status(&self) -> Option<String> {
+        if self.prompt.query().is_empty() {
+            return None;
+        }
+        let n = self.hits.len();
+        let count = if n == 1 {
+            "1 match".to_string()
+        } else {
+            format!("{n} matches")
+        };
+        Some(if self.searching {
+            if n == 0 {
+                "Searching…".to_string()
+            } else {
+                format!("Searching… {count}")
+            }
+        } else if n == 0 {
+            "No matches".to_string()
+        } else if self.limited {
+            format!("First {n} matches")
+        } else {
+            count
+        })
+    }
+
     pub fn push(&mut self, c: char) {
         self.prompt.push(c);
         self.query_changed();

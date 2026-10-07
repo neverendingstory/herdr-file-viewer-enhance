@@ -14,7 +14,7 @@ fn returns_one_hit_per_matching_line_with_source_coordinates() {
     )
     .unwrap();
 
-    let output = repo_search::search(tmp.path(), "needle", false);
+    let output = repo_search::search(tmp.path(), "needle", false, false);
 
     assert_eq!(
         output.hits,
@@ -41,7 +41,7 @@ fn uppercase_query_is_case_sensitive() {
     let tmp = TempDir::new();
     fs::write(tmp.path().join("a.txt"), "Needle\nneedle\nNEEDLE\n").unwrap();
 
-    let output = repo_search::search(tmp.path(), "Needle", false);
+    let output = repo_search::search(tmp.path(), "Needle", false, false);
 
     assert_eq!(output.hits.len(), 1);
     assert_eq!(output.hits[0].line, 1);
@@ -54,7 +54,7 @@ fn ignored_files_follow_the_include_ignored_scope() {
     fs::write(tmp.path().join("visible.txt"), "needle\n").unwrap();
     fs::write(tmp.path().join("ignored.txt"), "needle\n").unwrap();
 
-    let project = repo_search::search(tmp.path(), "needle", false);
+    let project = repo_search::search(tmp.path(), "needle", false, false);
     assert_eq!(
         project
             .hits
@@ -64,7 +64,7 @@ fn ignored_files_follow_the_include_ignored_scope() {
         vec!["visible.txt"]
     );
 
-    let all = repo_search::search(tmp.path(), "needle", true);
+    let all = repo_search::search(tmp.path(), "needle", false, true);
     assert_eq!(
         all.hits
             .iter()
@@ -86,7 +86,7 @@ fn skips_git_binary_invalid_utf8_and_oversized_files() {
     fs::write(tmp.path().join("large.txt"), oversized).unwrap();
     fs::write(tmp.path().join("ok.txt"), "needle").unwrap();
 
-    let output = repo_search::search(tmp.path(), "needle", true);
+    let output = repo_search::search(tmp.path(), "needle", false, true);
 
     assert_eq!(output.hits.len(), 1);
     assert_eq!(output.hits[0].path, "ok.txt");
@@ -101,7 +101,7 @@ fn caps_results_and_reports_that_more_matches_exist() {
         .join("\n");
     fs::write(tmp.path().join("many.txt"), body).unwrap();
 
-    let output = repo_search::search(tmp.path(), "needle", false);
+    let output = repo_search::search(tmp.path(), "needle", false, false);
 
     assert_eq!(output.hits.len(), repo_search::MAX_RESULTS);
     assert!(output.limited);
@@ -117,7 +117,7 @@ fn long_excerpt_keeps_the_match_and_valid_utf8() {
     )
     .unwrap();
 
-    let output = repo_search::search(tmp.path(), "needle", false);
+    let output = repo_search::search(tmp.path(), "needle", false, false);
 
     assert_eq!(output.hits.len(), 1);
     assert!(output.hits[0].excerpt.contains("needle"));

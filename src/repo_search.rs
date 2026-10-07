@@ -39,16 +39,25 @@ pub struct SearchOutput {
 
 /// Search text files under `root` using literal smartcase matching.
 ///
-/// `include_ignored` mirrors the tree's `i` state. The `.git` subtree is excluded in both modes by
-/// [`index::build_with_ignored`]. Results are deterministic because that index is path-sorted and
-/// lines are visited in source order.
-pub fn search(root: &Path, query: &str, include_ignored: bool) -> SearchOutput {
+/// `include_ignored` mirrors the tree's `i` state and `is_git_repo` bounds the ancestor
+/// `.gitignore` search at the repository, exactly as the file index does ([`index::file_walk`]).
+/// The `.git` subtree is excluded in both modes. Results are deterministic because paths are
+/// sorted and lines are visited in source order.
+pub fn search(root: &Path, query: &str, is_git_repo: bool, include_ignored: bool) -> SearchOutput {
     if query.is_empty() {
         return SearchOutput::default();
     }
 
+    let mut paths: Vec<String> = index::file_walk(root, is_git_repo, include_ignored)
+        .build()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_some_and(|t| t.is_file()))
+        .filter_map(|e| e.path().strip_prefix(root).ok().map(index::rel_to_slash))
+        .collect();
+    paths.sort();
+
     let mut output = SearchOutput::default();
-    for relative in index::build_with_ignored(root, include_ignored) {
+    for relative in paths {
         let Some(text) = read_bounded_text(&root.join(&relative)) else {
             continue;
         };

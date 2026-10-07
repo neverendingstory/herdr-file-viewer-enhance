@@ -82,6 +82,12 @@
 # toggles it. Default:
 #compact_dirs = false
 
+# Open the folders above each file with uncommitted changes, so new work shows
+# without hunting for it: at launch, and whenever a refresh finds a newly
+# changed file. A folder you collapse stays closed until a different file
+# inside it changes. Default:
+#expand_changed = false
+
 # Choose the automatic initial view for Git-changed files. "diff" preserves the
 # default diff-first behavior. "content" applies the normal file-type policy
 # instead: Markdown opens rendered, while source/text opens in syntax content.
@@ -90,6 +96,12 @@
 # changed-file filters, baselines, and `D` diff presentation are unaffected.
 # An unrecognized value falls back to "diff". Default:
 #changed_file_view = "diff"
+
+# Choose the initial Git diff baseline. "base" compares the full body of work
+# since the base branch's merge-base; "head" shows working-tree changes only.
+# Omit it to retain the context-smart default (base on a feature branch/worktree,
+# HEAD on the default branch). The `b` key still toggles either way. Default: omit this setting.
+#baseline = "base" # optional override
 
 # `update_check` governs release details and project spotlights.
 # `false` disables all remote requests and their display. When unset,
@@ -139,6 +151,20 @@
 # tree_position: which side the tree sits on, "left" (default) or "right". An
 # unrecognized value falls back to "left". Default:
 #tree_position = "left"
+
+# open_direction: the one LAYOUT key that is about the HERDR pane rather than the
+# inside of it. It chooses which way the summon action (prefix+f, or
+# `open-file-viewer`) splits the pane you press it from:
+#
+#   "right" (default) -- viewer beside your work, terminal on the left
+#   "down"            -- viewer underneath, terminal keeps the top half
+#
+# "bottom" is accepted as a synonym for "down"; anything else falls back to
+# "right". The tab action (`open-file-viewer-tab`) is unaffected -- a tab has no
+# direction -- and so is any pane you have already opened: this is read by the
+# launcher at summon time, so it takes effect on the NEXT open, not on relaunch
+# of a running viewer. Default:
+#open_direction = "right"
 
 # --- Content preview ---------------------------------------------------------
 #

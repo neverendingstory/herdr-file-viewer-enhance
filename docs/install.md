@@ -1,11 +1,12 @@
 # Install & updating
 
-Requirements: **herdr 0.7.0+**, on **Linux** or **macOS** (native Windows
+Requirements: **herdr 0.7.5+**, on **Linux** or **macOS** (native Windows
 `x86_64-pc-windows-msvc` is a [preview](windows.md)). **Git** must be on `PATH` at
 runtime. The viewer shells out to the system `git` CLI (read-only subcommands) for the
 git-aware tree (status markers, changed-only filter, baseline toggle) and the diff view.
 Without git the viewer still opens, but those features are degraded (no status colors, no
-diffs). The optional renderers (`glow` / `delta` / `bat`) are separate.
+diffs). git 2.39 (Apple's Xcode git) is supported. The optional renderers (`glow` / `delta` /
+`bat`) are separate.
 The system `curl` is optional: without it, document retrieval is unavailable without an error.
 See [external renderers](renderers.md).
 
@@ -18,9 +19,9 @@ See [external renderers](renderers.md).
 > prebuilt at all: an unsupported platform, or a version that hasn't been released yet. The install
 > command is the same either way.
 
-**Install through herdr**: herdr runs the manifest's `[[build]]` step at install time, either
-downloading a prebuilt binary or compiling from source, producing `./target/release/herdr-file-viewer`,
-which the viewer pane launches:
+**Install through herdr.** At install time, herdr runs the manifest's `[[build]]` step. The step
+downloads a prebuilt binary or compiles from source and produces
+`./target/release/herdr-file-viewer`, which the viewer pane launches:
 
 ```bash
 # install (and update, re-run any time to get the latest):
@@ -65,7 +66,8 @@ herdr plugin install smarzban/herdr-file-viewer
 
 - You **don't** need `--ref` to stay current; it only *pins* a specific version (and a pin stays
   pinned until you change it).
-- Want a heads-up the moment a release ships? On GitHub, **Watch → Custom → Releases**.
+- Want a heads-up the moment a release ships? On GitHub, select **Watch**, then **Custom**, then
+  **Releases**.
 - Prefer no remote notices? Set [`update_check = false`](configuration.md), or set
   `HERDR_FILE_VIEWER_NO_UPDATE_CHECK` when the config key is absent. The check otherwise runs at
   most once per 24h and never blocks the viewer when offline.

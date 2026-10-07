@@ -3,7 +3,7 @@
 [![CI](https://github.com/smarzban/herdr-file-viewer/actions/workflows/ci.yml/badge.svg)](https://github.com/smarzban/herdr-file-viewer/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Rust 1.96+](https://img.shields.io/badge/rust-1.96%2B-orange.svg)
-![herdr 0.7+](https://img.shields.io/badge/herdr-0.7%2B-8a2be2)
+![herdr 0.7.5+](https://img.shields.io/badge/herdr-0.7.5%2B-8a2be2)
 ![platforms: linux • macOS • Windows (preview)](https://img.shields.io/badge/platforms-linux%20%E2%80%A2%20macOS%20%E2%80%A2%20Windows%20(preview)-informational)
 
 **A git-aware, read-only file viewer in a herdr pane.** Tree on the left. On the right, the view
@@ -11,13 +11,16 @@ that file deserves: a **diff** if it changed, **rendered markdown**, or **highli
 Agents can drop you on a file or a line. You pin one file, mark a range, and paste those notes
 back into the chat. It never touches your files.
 
+> [!TIP]
+> Get **[tsk](https://github.com/smarzban/herdr-tsk)** to keep your work and your agents' work on one board. TUI for you, CLI for them.
+
 ![herdr-file-viewer open in a herdr split beside your work: the directory tree on the left, syntax-highlighted content on the right](assets/File-viewer.png)
 
 *The right view per file, here a markdown file rendered (headings, inline code, tables) in your terminal's theme:*
 
 ![herdr-file-viewer rendering a markdown file: colored headings and styled inline code on the right, the git-status tree on the left](assets/Markdown-view.png)
 
-*…and running full-screen, the same tree + content, filling the terminal:*
+*The same tree and content can fill the terminal:*
 
 ![herdr-file-viewer running full-screen](assets/File-Viewer-FS.png)
 
@@ -48,8 +51,8 @@ back into the chat. It never touches your files.
 
 ## Highlights
 
-A taste of what the keys do — the [full key & mouse reference](docs/keys.md) has them all, and the
-[usage guide](docs/usage.md) walks through each feature:
+The [full key and mouse reference](docs/keys.md) lists every binding. The [usage
+guide](docs/usage.md) explains each feature. These are the main keys:
 
 | Key | Does |
 | --- | --- |
@@ -91,29 +94,42 @@ key = "prefix+shift+f"
 type = "plugin_action"
 command = "herdr-file-viewer.open-file-viewer-tab"
 description = "open file viewer in tab"
+
+[[keys.command]]
+key = "prefix+d"
+type = "plugin_action"
+command = "herdr-file-viewer.open-file-viewer-at"
+description = "open file viewer at… (split)"   # asks for a directory in a popup
+
+[[keys.command]]
+key = "prefix+alt+d"
+type = "plugin_action"
+command = "herdr-file-viewer.open-file-viewer-at-tab"
+description = "open file viewer at… (tab)"     # same popup, opens a new tab
 ```
 
-Run `herdr server reload-config`, then press your key. That's the whole setup: the split-pane
-viewer and its open actions ship **inside** the plugin and register automatically on install, so
-you only add the keybinding.
+Run `herdr server reload-config`, then press your key. The plugin includes the split-pane viewer and
+its open actions, which register during installation. You only need to add the keybinding.
 
 Once the viewer has focus, press bare `s` to search project contents — not `prefix+s`, which is
 Herdr's default shortcut for its own Settings screen. Viewer keys do not use the Herdr prefix.
 
-Deeper detail lives in the docs: [install & updating](docs/install.md),
-[summoning the viewer](docs/summoning.md) (split vs. tab, the launcher, `--remote`),
-[external renderers](docs/renderers.md), and the [keys reference](docs/keys.md).
+The docs cover [installing and updating](docs/install.md),
+[summoning the viewer](docs/summoning.md) (split vs. tab, opening at another directory, the
+launcher, `--remote`), [external renderers](docs/renderers.md), and the
+[keys reference](docs/keys.md).
 
 ## Configuration
 
-An optional, **read-only** TOML config file lets you override the editor, the renderer/opener
-commands, a couple of startup toggles, the tree layout, and the keybindings. A fully-commented
-[`config.example.toml`](config.example.toml) ships in the plugin folder; copy it as `config.toml`
-into the directory `herdr plugin config-dir herdr-file-viewer` prints, then uncomment what you want.
+An optional, **read-only** TOML config file lets you override the editor, renderer and opener
+commands, startup toggles, tree layout, and keybindings. A fully commented
+[`config.example.toml`](config.example.toml) ships in the plugin folder. Copy it as `config.toml`
+into the directory printed by `herdr plugin config-dir herdr-file-viewer`, then uncomment the
+settings you want.
 
-The full reference — file location, precedence, every key, and `[keys]` remapping — is in
-**[docs/configuration.md](docs/configuration.md)**. See your effective settings any time in the `?`
-help overlay's **Settings** section.
+The full reference covers the file location, precedence, every key, and `[keys]` remapping. Read it
+in **[docs/configuration.md](docs/configuration.md)**. See your effective settings any time in the
+`?` help overlay's **Settings** section.
 
 ## Windows
 
@@ -125,21 +141,21 @@ Native Windows is supported as a **preview** (install works the same way; the op
 
 Full docs live in **[docs/](docs/README.md)**:
 
-- **[Install & updating](docs/install.md)** — prebuilt vs. source, pinning a version, local-dev linking, and remote notices.
-- **[Summoning the viewer](docs/summoning.md)** — the open actions, the idempotent launcher, split vs. tab, and the `--remote` caveat.
-- **[Usage guide](docs/usage.md)** — a feature-by-feature tour of the whole viewer.
-- **[Keys & mouse](docs/keys.md)** — the complete key table, mouse gestures, and editor hand-off.
-- **[Configuration](docs/configuration.md)** — the full `config.toml` reference and `[keys]` remapping.
-- **[External renderers](docs/renderers.md)** — the optional `glow` / `delta` / `bat` integrations and the plain-text fallback.
-- **[Windows (preview)](docs/windows.md)** — native-Windows specifics and WSL.
-- **[Architecture](ARCHITECTURE.md)** — one in-process TUI owning both columns, the component map, and the load-bearing decisions.
-- **[Security](SECURITY.md)** — the threat model for opening untrusted content, and how to report a vulnerability.
+- **[Install & updating](docs/install.md)**: prebuilt vs. source, pinning a version, local-dev linking, and remote notices.
+- **[Summoning the viewer](docs/summoning.md)**: the open actions, the idempotent launcher, split vs. tab, and the `--remote` caveat.
+- **[Usage guide](docs/usage.md)**: a feature-by-feature tour of the whole viewer.
+- **[Keys & mouse](docs/keys.md)**: the complete key table, mouse gestures, and editor hand-off.
+- **[Configuration](docs/configuration.md)**: the full `config.toml` reference and `[keys]` remapping.
+- **[External renderers](docs/renderers.md)**: the optional `glow` / `delta` / `bat` integrations and the plain-text fallback.
+- **[Windows (preview)](docs/windows.md)**: native-Windows specifics and WSL.
+- **[Architecture](ARCHITECTURE.md)**: one in-process TUI owning both columns, the component map, and the core decisions.
+- **[Security](SECURITY.md)**: the threat model for opening untrusted content, and how to report a vulnerability.
 
 ## Contributing
 
-Bug reports and feature requests are very welcome — please
-[open an issue](https://github.com/smarzban/herdr-file-viewer/issues). To build, test, and send a
-change, see [CONTRIBUTING.md](CONTRIBUTING.md).
+Bug reports and feature requests are welcome. [Open an
+issue](https://github.com/smarzban/herdr-file-viewer/issues), or see
+[CONTRIBUTING.md](CONTRIBUTING.md) to build, test, and submit a change.
 
 ## License
 

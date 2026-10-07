@@ -255,7 +255,7 @@ pub(crate) const REGISTRY: &[Binding] = &[
         intent: Intent::Collapse,
         name: "collapse",
         default_keys: &[KeyCode::Left, KeyCode::Char('h')],
-        description: "Collapse the selected directory.",
+        description: "Collapse a directory, or walk up from a file/collapsed directory.",
         category: "Navigation",
     },
     Binding {
@@ -437,7 +437,7 @@ pub(crate) const REGISTRY: &[Binding] = &[
         intent: Intent::DismissUpdate,
         name: "dismiss_update",
         default_keys: &[KeyCode::Char('u')],
-        description: "Dismiss the advisory status row for this session.",
+        description: "Dismiss the advisory status row for this session; remember the current Spotlight across launches.",
         category: "Session",
     },
     Binding {
@@ -922,6 +922,7 @@ mod tests {
         for copy in [binding.description, help.as_str()] {
             assert!(copy.contains("advisory status row"));
             assert!(copy.contains("this session"));
+            assert!(copy.contains("remember the current Spotlight across launches"));
             assert!(!copy.contains("all remote notices"));
         }
     }

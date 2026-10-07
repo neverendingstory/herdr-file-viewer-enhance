@@ -599,6 +599,7 @@ struct ProjectSearchJob {
     seq: u64,
     root: PathBuf,
     query: String,
+    is_git_repo: bool,
     include_ignored: bool,
 }
 
@@ -793,6 +794,8 @@ pub struct Controller {
     /// default `false`). A session preference carried across a re-root (like `show_ignored` /
     /// `hide_hidden`), so the new root's fresh tree is rebuilt with the same shape.
     compact_dirs: bool,
+    /// Whether a newly changed file opens the folders above it (config `expand_changed`).
+    expand_changed: bool,
     changed_only: bool,
     /// Which command a Diff/FullDiff render delegates to (`D`, cycling Delta →
     /// DeltaSideBySide → Raw). Carried
@@ -947,6 +950,10 @@ pub struct Controller {
     /// `u` key). It is never reset by a later background replacement, so the current process
     /// cannot revive a dismissed line.
     update_dismissed: bool,
+    /// Only the last accepted spotlight explicitly dismissed by the user; independent of refreshes.
+    dismissed_spotlight: Option<update::dismissal::DismissedSpotlight>,
+    /// Injected advisory persistence. `None` keeps construction and tests free of cache I/O.
+    spotlight_dismissal_store: Option<Box<dyn update::dismissal::SpotlightDismissalStore>>,
     /// One-shot receiver for a background notice replacement (`None` when no check ran).
     notice_rx: Option<mpsc::Receiver<NoticeSnapshot>>,
     /// One-shot receiver for a re-root's off-thread status/changed-set computation (AC-17).
@@ -1090,6 +1097,7 @@ impl Controller {
             // Defaults ON, matching the resolver: a Controller built without config still guards.
             confirm_discard: true,
             compact_dirs: false,
+            expand_changed: false,
             tree_hscroll: 0,
             changed_only: false,
             diff_render_mode: DiffRenderMode::default(),
@@ -1135,6 +1143,8 @@ impl Controller {
             settings_display: None,
             keybindings_display: None,
             update_dismissed: false,
+            dismissed_spotlight: None,
+            spotlight_dismissal_store: None,
             notice_rx: None,
             status_rx: None,
             modal: Modal::None,
@@ -1153,6 +1163,10 @@ impl Controller {
             bindings: crate::input::default_bindings(),
             key_load_outcome: crate::input::KeyLoadOutcome::default(),
         };
+        // Bound the tree's ancestor `.gitignore` search at this repo's own boundary rather than
+        // letting it climb into an unrelated enclosing directory/repository (see
+        // `index::walk_builder`); a no-op (stays `false`) outside a repo.
+        ctrl.tree.set_is_git_repo(is_git_repo);
         ctrl.refresh_git_state();
         ctrl.dispatch_render();
         ctrl
@@ -1238,7 +1252,12 @@ impl Controller {
                     job = newer;
                 }
                 let output = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                    crate::repo_search::search(&job.root, &job.query, job.include_ignored)
+                    crate::repo_search::search(
+                        &job.root,
+                        &job.query,
+                        job.is_git_repo,
+                        job.include_ignored,
+                    )
                 }))
                 .unwrap_or_default();
                 if result_tx
@@ -1331,6 +1350,7 @@ impl Controller {
         self.root = resolved.root.clone();
         self.is_git_repo = resolved.is_git_repo;
         self.tree = TreeModel::new(resolved.root.clone());
+        self.tree.set_is_git_repo(self.is_git_repo);
         self.tree.set_compact_dirs(self.compact_dirs); // a carried session preference (AC-12)
         // Recompute the cached branch for the new root's bottom-border title. Cheap and
         // synchronous: a single `git rev-parse` against the already-resolved repo root, done once
@@ -1584,6 +1604,15 @@ impl Controller {
         self.width = width;
     }
 
+    /// Inject the optional spotlight dismissal record before the first draw. No remote I/O.
+    pub fn set_spotlight_dismissal_store(
+        &mut self,
+        store: Box<dyn update::dismissal::SpotlightDismissalStore>,
+    ) {
+        self.dismissed_spotlight = store.load();
+        self.spotlight_dismissal_store = Some(store);
+    }
+
     /// Install the initial remote-notice snapshot plus the receiver a background probe uses to
     /// deliver one complete replacement. Called once by the run loop after construction; the
     /// default snapshot keeps every existing no-update call site inert.
@@ -1711,6 +1740,17 @@ impl Controller {
     pub fn apply_compact_dirs(&mut self, on: bool) {
         self.compact_dirs = on;
         self.tree.set_compact_dirs(on);
+    }
+
+    /// Apply the config-driven `expand_changed` switch. Called once by `app::run` right after
+    /// construction, so turning it on opens the folders of every file the launch status already
+    /// lists; from then on each status that lands opens the folders of its newly changed files.
+    pub fn apply_expand_changed(&mut self, on: bool) {
+        self.expand_changed = on;
+        if on {
+            let status = self.git_status.clone();
+            self.expand_new_changes(&status, &BTreeMap::new());
+        }
     }
 
     /// Apply a launch **open target** once at startup: resolve `path` under the tree **root**,
@@ -1954,7 +1994,7 @@ impl Controller {
         // `tree.selected()` (which re-runs the gitignore-aware filesystem walk) a second time
         // for the wrap decision — `visible_nodes()` is the hot, per-frame path.
         let nodes = self.tree.visible_nodes();
-        let selected = self.tree.cursor();
+        let selected = self.tree.cursor_in(&nodes);
         // Active wrapping responds immediately to the live `w` preference while a width-sensitive
         // reflow is pending; the settled document captures the same value when that render lands.
         let wrap = self.wrap_for(nodes.get(selected));
@@ -2399,11 +2439,16 @@ impl Controller {
     ///
     /// Status mode and baseline-aware changed-only share the tree's single `changed_only` flag, so
     /// a relaxed filter must clear both mirrors; while status mode is on it owns the flag, which
-    /// leaves `changed_only` false.
+    /// leaves `changed_only` false. A relaxed status mode also hands the tree back the baseline
+    /// changed-set, which `d` had swapped for working-tree status, so full-tree markers stay
+    /// baseline-aware (the same restore as leaving `d` by key).
     pub(super) fn resync_filter_mirrors(&mut self) {
         if self.tree.changed_only() {
             self.changed_only = !self.status_mode;
         } else {
+            if self.status_mode {
+                self.tree.set_changed_only(false, &self.changed);
+            }
             self.changed_only = false;
             self.status_mode = false;
         }
@@ -2630,7 +2675,10 @@ impl Controller {
     }
 
     /// Left (←/h): collapse the selected directory when the tree is focused, or scroll the
-    /// content pane left when it is focused.
+    /// content pane left when it is focused. In the normal tree, a file or already-collapsed
+    /// directory instead walks to its nearest visible ancestor and collapses it. Changed-only and
+    /// status trees keep their existing behavior because their directory rows are synthetic and
+    /// always expanded.
     fn collapse(&mut self) -> Effects {
         if self.focus == Focus::Content {
             return self.scroll_content_h(-(HSCROLL_STEP as i32));
@@ -2638,11 +2686,35 @@ impl Controller {
         if self.focus == Focus::Pinned {
             return self.scroll_pinned_h(-(HSCROLL_STEP as i32));
         }
-        if let Some(node) = self.tree.selected()
-            && node.kind == NodeKind::Dir
-        {
+        let Some(node) = self.tree.selected() else {
+            return Effects::noop();
+        };
+        // During an asynchronous re-root refresh, the fresh tree has not received its
+        // changed-only filter yet. The controller's carried mode state is authoritative during
+        // that interval, so c/d cannot briefly fall through to normal-tree walk-up behavior.
+        if self.changed_only || self.status_mode {
+            if node.kind == NodeKind::Dir {
+                self.tree.collapse(&node.path);
+                return Effects::redraw();
+            }
+            return Effects::noop();
+        }
+        if node.kind == NodeKind::Dir && node.expanded {
             self.tree.collapse(&node.path);
             return Effects::redraw();
+        }
+
+        let mut current = node.path.as_path();
+        while let Some(parent) = current.parent() {
+            if parent == self.root || !parent.starts_with(&self.root) {
+                return Effects::noop();
+            }
+            if self.tree.select(parent) {
+                self.tree.collapse(parent);
+                self.dispatch_render();
+                return Effects::redraw();
+            }
+            current = parent;
         }
         Effects::noop()
     }
@@ -3293,14 +3365,30 @@ impl Controller {
         Effects::redraw()
     }
 
-    /// Hide the visible remote-notice line for this session (`u`). This never changes the
-    /// snapshot or cache, so What's New stays available and a fresh session can show the same row.
+    /// Hide the visible remote-notice line for this session (`u`) and remember its spotlight.
+    /// The snapshot and refresh cache stay unchanged, so What's New and release notices survive.
     fn dismiss_update(&mut self) -> Effects {
         if self.remote_notice_status().is_none() {
             return Effects::noop();
         }
 
         self.update_dismissed = true;
+        // Persist only a spotlight the row actually showed: re-saving one already filtered out
+        // would overwrite a newer dismissal another viewer recorded in the shared file.
+        let already_hidden = self
+            .dismissed_spotlight
+            .as_ref()
+            .is_some_and(|dismissed| dismissed.matches(&self.notice_snapshot.spotlight));
+        if !already_hidden
+            && let Some(dismissed) = update::dismissal::DismissedSpotlight::from_spotlight(
+                &self.notice_snapshot.spotlight,
+            )
+        {
+            if let Some(store) = &self.spotlight_dismissal_store {
+                store.save(&dismissed);
+            }
+            self.dismissed_spotlight = Some(dismissed);
+        }
         Effects::redraw()
     }
 
@@ -3313,6 +3401,7 @@ impl Controller {
         update::status::format_status(
             &self.notice_snapshot,
             self.update_dismissed,
+            self.dismissed_spotlight.as_ref(),
             details_key.as_deref(),
             dismiss_key.as_deref(),
         )
@@ -3321,6 +3410,11 @@ impl Controller {
     /// Whether the go-to-file finder overlay is currently open.
     pub fn finder_open(&self) -> bool {
         self.modal.finder().is_some()
+    }
+
+    /// Whether the open finder is still indexing or matching its current query.
+    pub fn finder_busy(&self) -> bool {
+        self.modal.finder().is_some_and(FinderState::busy)
     }
 
     /// Whether the help overlay is currently open.
@@ -3632,7 +3726,14 @@ impl Controller {
     /// dispatched selection (stale results are discarded). Returns `Some` redraw effect when
     /// fresh content was applied, so the run loop repaints; `None` when nothing arrived.
     pub fn poll(&mut self) -> Option<Effects> {
-        let mut applied = false;
+        let mut applied = self.modal.finder_mut().is_some_and(FinderState::poll);
+        if self
+            .modal
+            .finder_mut()
+            .is_some_and(FinderState::take_ready_confirm)
+        {
+            applied |= self.confirm_finder().redraw;
+        }
         while let Ok(completion) = self.result_rx.try_recv() {
             let RenderCompletion { job, result } = completion;
             let seq = job.seq;
@@ -4188,6 +4289,52 @@ mod tests {
             renderers: None,
         };
         (Controller::new(resolved, Baseline::Head, components), root)
+    }
+
+    /// Enter pressed while the finder is still indexing must be deferred, then honoured by
+    /// `Controller::poll` once that query's result lands. The worker is held at a gate, so the
+    /// finder is provably busy at Enter rather than racing to finish inside the keystroke.
+    #[test]
+    fn enter_before_the_finders_results_arrive_confirms_once_they_land() {
+        let (mut ctrl, _root) = open_target_controller();
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        ctrl.modal = Modal::Finder(FinderState::start_with(move |_| {
+            entered_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            Some(vec!["other.rs".into(), "src/deep/file.rs".into()])
+        }));
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap();
+
+        ctrl.handle_finder_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE));
+        let fx = ctrl.handle_finder_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(fx.redraw);
+        assert!(
+            ctrl.finder_busy(),
+            "precondition: Enter arrived before any result"
+        );
+        assert!(
+            ctrl.finder_open(),
+            "Enter while busy is deferred, not applied or dropped"
+        );
+
+        release_tx.send(()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while ctrl.finder_open() {
+            ctrl.poll();
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the deferred Enter never fired"
+            );
+            std::thread::yield_now();
+        }
+        let selected = ctrl
+            .tree
+            .selected()
+            .expect("the confirmed file is selected");
+        assert_eq!(selected.path.file_name().unwrap(), "other.rs");
     }
 
     #[test]

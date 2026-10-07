@@ -164,15 +164,17 @@ impl HelpState {
 ///
 /// Lines, in order:
 /// 1. `Herdr File Viewer` (the display title, alone — the nice form, not the raw package name)
-/// 2. package description
-/// 3. *(blank)*
-/// 4. bare repo host+path (the `https://` scheme + any `Repository:` label stripped)
-/// 5. *(blank)*
-/// 6. `vX.Y.Z · <status>` (version + update status: `Up to date` or `Update available: vX.Y.Z`)
-/// 7. `<SPDX> License`
-/// 8. *(blank)*
-/// 9. GitHub-star call-to-action — the closing line (a plain `★`, U+2605, not the `⭐️` emoji,
-///    whose double-width mis-renders in the TUI)
+/// 2. *(blank)*
+/// 3. package description
+/// 4. *(blank)*
+/// 5. bare repo host+path (the `https://` scheme + any `Repository:` label stripped)
+/// 6. *(blank)*
+/// 7. `vX.Y.Z · <status>` (version + update status: `Up to date` or `Update available: vX.Y.Z`)
+/// 8. `<SPDX> License`
+/// 9. *(blank)*
+/// 10. GitHub-star call-to-action (a plain `★`, U+2605, not the `⭐️` emoji, whose double-width
+///     mis-renders in the TUI)
+/// 11. X profile link, the closing line
 ///
 /// (AC-16, AC-17, AC-18, AC-19)
 ///
@@ -190,6 +192,7 @@ pub fn about_text(snapshot: &crate::update::NoticeSnapshot) -> String {
         .trim_start_matches("http://");
     format!(
         "{title}\n\
+         \n\
          {description}\n\
          \n\
          {repository}\n\
@@ -197,7 +200,8 @@ pub fn about_text(snapshot: &crate::update::NoticeSnapshot) -> String {
          v{version} · {status}\n\
          {license} License\n\
          \n\
-         {star_cta}",
+         {star_cta}\n\
+         {x_handle}",
         // The display title (the nice form) — NOT the raw `CARGO_PKG_NAME` (`herdr-file-viewer`),
         // which still appears verbatim in the bare repo URL below.
         title = "Herdr File Viewer",
@@ -207,6 +211,7 @@ pub fn about_text(snapshot: &crate::update::NoticeSnapshot) -> String {
         status = status,
         license = env!("CARGO_PKG_LICENSE"),
         star_cta = "If you enjoy the file viewer, don't forget to give it a ★ on GitHub!",
+        x_handle = "Say hi at https://x.com/smarzbanX",
     )
 }
 
@@ -219,6 +224,9 @@ pub struct SettingsWired {
     pub editor: Option<std::ffi::OsString>,
     pub open: String,
     pub reveal: String,
+    /// The baseline actually passed to the new controller after applying the optional config value
+    /// or the root-aware automatic default.
+    pub baseline: crate::git::Baseline,
 }
 
 /// Assemble the "Settings" pane text (AC-15, AC-18): a first line reflecting the config
@@ -267,6 +275,10 @@ pub fn settings_text(
     };
     let open = opener_row(&eff.open, &wired.open);
     let reveal = opener_row(&eff.reveal, &wired.reveal);
+    let baseline = match wired.baseline {
+        crate::git::Baseline::Base => "base",
+        crate::git::Baseline::Head => "head",
+    };
     let update_check = if eff.update_check { "on" } else { "off" };
     let confirm_discard = if eff.confirm_discard { "on" } else { "off" };
 
@@ -280,13 +292,16 @@ pub fn settings_text(
          hide_dotfiles     = {hide_dotfiles}\n\
          show_ignored      = {show_ignored}\n\
          compact_dirs      = {compact_dirs}\n\
+         expand_changed    = {expand_changed}\n\
          changed_file_view = {changed_file_view}\n\
+         baseline          = {baseline}\n\
          update_check      = {update_check}\n\
          confirm_discard   = {confirm_discard}\n\
          scroll_lines      = {scroll_lines}\n\
          tree_width        = {tree_width}\n\
          tree_position     = {tree_position}\n\
          tree_max_cols     = {tree_max_cols}\n\
+         open_direction    = {open_direction}\n\
          preview_max_lines = {preview_max_lines}\n\
          preview_max_kib   = {preview_max_kib}",
         open = open,
@@ -294,13 +309,16 @@ pub fn settings_text(
         hide_dotfiles = eff.hide_dotfiles,
         show_ignored = eff.show_ignored,
         compact_dirs = eff.compact_dirs,
+        expand_changed = eff.expand_changed,
         changed_file_view = eff.changed_file_view.label(),
+        baseline = baseline,
         update_check = update_check,
         confirm_discard = confirm_discard,
         scroll_lines = eff.scroll_lines,
         tree_width = eff.tree_width,
         tree_position = eff.tree_position.label(),
         tree_max_cols = eff.tree_max_cols,
+        open_direction = eff.open_direction.label(),
         preview_max_lines = eff.preview_max_lines,
         preview_max_kib = eff.preview_max_kib,
     )
@@ -497,8 +515,8 @@ mod tests {
             "about_text must contain the bare repository URL (AC-17)"
         );
         assert!(
-            !text.contains("https://") && !text.contains("Repository:"),
-            "about_text must strip the URL scheme and the 'Repository:' label (AC-17)"
+            !text.contains("https://github.com") && !text.contains("Repository:"),
+            "about_text must strip the GitHub repository scheme and its 'Repository:' label (AC-17)"
         );
         // The license reads "<SPDX> License" (e.g. "MIT License").
         assert!(
@@ -507,10 +525,10 @@ mod tests {
         );
     }
 
-    // (c) AC-18: the GitHub-star CTA uses a plain ★ (U+2605, not the ⭐️ emoji) and is the CLOSING
-    // line of About — the last non-empty line, below "<SPDX> License".
+    // The GitHub-star CTA uses a plain ★ (U+2605, not the ⭐️ emoji), follows the license, and
+    // is followed by the closing X profile link.
     #[test]
-    fn star_cta_is_the_closing_line() {
+    fn about_ctas_follow_license_with_x_profile_closing() {
         let text = about_text(&crate::update::NoticeSnapshot::default());
         let lines: Vec<&str> = text.split('\n').collect();
 
@@ -531,14 +549,21 @@ mod tests {
             license_pos < cta_pos,
             "the CTA (line {cta_pos}) must come BELOW the License line (line {license_pos}) — AC-18"
         );
-        // It is the LAST non-empty line of About.
+        let x_pos = lines
+            .iter()
+            .position(|line| *line == "Say hi at https://x.com/smarzbanX")
+            .expect("about_text must contain the X profile link");
+        assert!(
+            cta_pos < x_pos,
+            "the X profile link must follow the GitHub CTA"
+        );
         let last_non_empty = lines
             .iter()
-            .rposition(|l| !l.trim().is_empty())
+            .rposition(|line| !line.trim().is_empty())
             .expect("about_text has a non-empty line");
         assert_eq!(
-            cta_pos, last_non_empty,
-            "the CTA must be the closing (last non-empty) line of About (AC-18)"
+            x_pos, last_non_empty,
+            "the X profile link must be the closing line of About"
         );
     }
 
@@ -802,13 +827,16 @@ mod tests {
             hide_dotfiles: true,
             show_ignored: true,
             compact_dirs: true,
+            expand_changed: true,
             changed_file_view: crate::view_policy::ChangedFileView::Content,
+            baseline: Some(crate::git::Baseline::Base),
             update_check: false,
             confirm_discard: false,
             scroll_lines: 7,
             tree_width: 25,
             tree_position: crate::config::TreePosition::Right,
             tree_max_cols: 50,
+            open_direction: crate::config::OpenDirection::Down,
             preview_max_lines: 8000,
             preview_max_kib: 2048,
         }
@@ -819,6 +847,7 @@ mod tests {
             editor: None,
             open: "xdg-open".to_string(),
             reveal: "xdg-open".to_string(),
+            baseline: crate::git::Baseline::Base,
         }
     }
 
@@ -842,12 +871,15 @@ mod tests {
             "hide_dotfiles",
             "show_ignored",
             "compact_dirs",
+            "expand_changed",
             "changed_file_view",
+            "baseline",
             "update_check",
             "scroll_lines",
             "tree_width",
             "tree_position",
             "tree_max_cols",
+            "open_direction",
             "preview_max_lines",
             "preview_max_kib",
         ] {
@@ -856,6 +888,11 @@ mod tests {
                 "settings_text must contain a row for '{key}':\n{text}"
             );
         }
+        assert!(
+            text.lines()
+                .any(|l| l.trim_start().starts_with("baseline") && l.contains("base")),
+            "settings_text must show the explicit baseline (base):\n{text}"
+        );
         // AC-9: the effective scroll step is shown as its own row with its value (7 in the fixture).
         assert!(
             text.lines()
@@ -877,6 +914,13 @@ mod tests {
             text.lines()
                 .any(|l| l.trim_start().starts_with("tree_max_cols") && l.contains("50")),
             "settings_text must show the effective tree_max_cols value (50):\n{text}"
+        );
+        // The launcher-facing split direction is shown too: the fixture sets `down`, so a row
+        // reading `right` would mean the config value never reached the overlay.
+        assert!(
+            text.lines()
+                .any(|l| l.trim_start().starts_with("open_direction") && l.contains("down")),
+            "settings_text must show the effective open_direction (down):\n{text}"
         );
         // The effective content-preview caps each appear as their own row with their value.
         assert!(
@@ -910,7 +954,9 @@ mod tests {
             "hide_dotfiles     = true",
             "show_ignored      = true",
             "compact_dirs      = true",
+            "expand_changed    = true",
             "changed_file_view = content",
+            "baseline          = base",
             "update_check      = off",
             "scroll_lines      = 7",
         ] {
@@ -989,7 +1035,9 @@ mod tests {
             "hide_dotfiles     = false",
             "show_ignored      = false",
             "compact_dirs      = false",
+            "expand_changed    = false",
             "changed_file_view = diff",
+            "baseline          = base",
             "update_check      = on",
             "confirm_discard   = on",
             &format!(
@@ -1002,6 +1050,7 @@ mod tests {
                 "tree_max_cols     = {}",
                 crate::config::DEFAULT_TREE_MAX_COLS
             ),
+            "open_direction    = right",
             &format!(
                 "preview_max_lines = {}",
                 crate::config::DEFAULT_PREVIEW_MAX_LINES
@@ -1016,6 +1065,31 @@ mod tests {
                 "built-in default scalar row must be exactly '{row}':\n{text}"
             );
         }
+    }
+
+    #[test]
+    fn settings_text_shows_the_actual_startup_baseline() {
+        let eff = crate::config::resolve(
+            &crate::config::Config {
+                baseline: Some(" HEAD ".to_owned()),
+                ..crate::config::Config::default()
+            },
+            |_| None,
+        );
+        let wired = SettingsWired {
+            baseline: crate::git::Baseline::Head,
+            ..sample_wired()
+        };
+        let text = settings_text(
+            &eff,
+            &LoadOutcome::Loaded,
+            std::path::Path::new("/cfg/config.toml"),
+            &wired,
+        );
+        assert!(
+            text.lines().any(|line| line == "baseline          = head"),
+            "Settings must report the baseline passed to Controller:\n{text}"
+        );
     }
 
     // AC-3: with no config editor, the row shows the WIRED editor (the `$EDITOR`/platform default

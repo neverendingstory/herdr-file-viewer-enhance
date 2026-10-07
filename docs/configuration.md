@@ -1,40 +1,38 @@
 # Configuration
 
 An optional TOML config file lets you override the editor, the renderer/opener commands, startup
-view and tree preferences, and the keybindings. **Read-only input** — the viewer never
-writes this file; edit it in your own editor and relaunch to pick up changes (there is no in-app
-settings editor). You can see what's currently in effect any time in the `?` help overlay's
-**Settings** section: each row shows the effective value (after config/env/default precedence). The
-renderer commands (`markdown`, `diff`, `syntax`) are not listed there; they live in this file.
+view and tree preferences, and the keybindings. The viewer treats the file as **read-only input**
+and never writes it. Edit it in your own editor and relaunch to apply changes; there is no in-app
+settings editor. The `?` help overlay's **Settings** section shows each effective value after
+config, environment, and default precedence. It does not list the renderer commands (`markdown`,
+`diff`, `syntax`), which remain in this file.
 
-**Quick start.** A fully-commented [`config.example.toml`](../config.example.toml) ships in the
-plugin folder, documenting every setting. You never have to guess where the live file goes: under
-herdr, `herdr plugin config-dir herdr-file-viewer` prints the exact directory herdr keeps it in.
-Copy the example there as `config.toml` in one line:
+**Quick start.** A fully commented [`config.example.toml`](../config.example.toml) in the plugin
+folder documents every setting. Under herdr, `herdr plugin config-dir herdr-file-viewer` prints the
+directory for the live file. Copy the example there as `config.toml`:
 
 ```bash
 cp "$(herdr plugin list --json | jq -r '.result.plugins[]|select(.plugin_id=="herdr-file-viewer").plugin_root')/config.example.toml" \
    "$(herdr plugin config-dir herdr-file-viewer)/config.toml"
 ```
 
-No `jq`? Run `herdr plugin list` to see the plugin folder (shown in brackets) and copy from there:
-`cp <plugin-folder>/config.example.toml "$(herdr plugin config-dir herdr-file-viewer)/config.toml"`.
+If `jq` is unavailable, run `herdr plugin list` to see the plugin folder in brackets. Then run `cp
+<plugin-folder>/config.example.toml "$(herdr plugin config-dir herdr-file-viewer)/config.toml"`.
 
-Then uncomment the lines you want and relaunch. Copying it as-is changes nothing (every line is
-commented out). However you copy it, **rename the copy to `config.toml`**: the `config.example.toml`
-filename itself is never read.
+Uncomment the settings you want, then relaunch. Copying the file unchanged has no effect because
+every setting is commented out. **Rename the copy to `config.toml`** because the viewer never reads
+`config.example.toml`.
 
 ## File location
 
-When run under herdr, the config lives at `$HERDR_PLUGIN_CONFIG_DIR/config.toml` — herdr provides
-that directory (on Linux it is
-`~/.config/herdr/plugins/config/herdr-file-viewer/`, so the file is that path plus `config.toml`).
-Run standalone (outside herdr), it
-falls back to `$XDG_CONFIG_HOME/herdr-file-viewer/config.toml`, defaulting to
+When run under herdr, the config lives at `$HERDR_PLUGIN_CONFIG_DIR/config.toml`. herdr provides
+that directory; on Linux it is `~/.config/herdr/plugins/config/herdr-file-viewer/`, so the file is
+that path plus `config.toml`. Run standalone (outside herdr), it falls back to
+`$XDG_CONFIG_HOME/herdr-file-viewer/config.toml`, defaulting to
 `~/.config/herdr-file-viewer/config.toml` when `XDG_CONFIG_HOME` isn't set. On **Windows**, where
 neither `XDG_CONFIG_HOME` nor `HOME` is set, that resolves to
-`%USERPROFILE%\.config\herdr-file-viewer\config.toml`. A missing file is the normal case — every key
-falls back to its default.
+`%USERPROFILE%\.config\herdr-file-viewer\config.toml`. A missing file is normal, and every key falls
+back to its default.
 
 Print the herdr-managed directory at any time with `herdr plugin config-dir herdr-file-viewer`. The
 path has to resolve to an **absolute** location: a config file is trusted input (it can set the
@@ -43,13 +41,14 @@ than sourced from whatever repository you happen to have open.
 
 ## Precedence
 
-A config key always wins. Only two keys also have an environment-variable fallback tier below the
-config key and above the built-in default — `editor` (`$EDITOR`) and `update_check`
-(`$HERDR_FILE_VIEWER_NO_UPDATE_CHECK`) — giving those two a `config > env > default` chain. Every
-other key (`markdown`, `diff`, `syntax`, `open`, `reveal`, `hide_dotfiles`, `show_ignored`,
-`compact_dirs`, `changed_file_view`, `confirm_discard`, `scroll_lines`, `tree_width`,
-`tree_position`, `tree_max_cols`, `preview_max_lines`, `preview_max_kib`) has no
-applicable environment variable; for those it's `config > default` only.
+A config key always wins. Only two keys have an environment-variable fallback between the config key
+and built-in default: `editor` (`$EDITOR`) and `update_check`
+(`$HERDR_FILE_VIEWER_NO_UPDATE_CHECK`). These two use a `config > env > default` chain. Every other
+key (`markdown`, `diff`, `syntax`, `open`, `reveal`, `hide_dotfiles`, `show_ignored`,
+`compact_dirs`, `expand_changed`, `changed_file_view`, `baseline`, `confirm_discard`,
+`scroll_lines`, `tree_width`, `tree_position`, `tree_max_cols`, `open_direction`,
+`preview_max_lines`, `preview_max_kib`) has no applicable environment variable; for those it's
+`config > default` only.
 
 ## Keys
 
@@ -68,13 +67,16 @@ reveal = "nautilus"
 hide_dotfiles = false       # true to hide dotfiles at startup (the `.` key still toggles)
 show_ignored = false        # true to show gitignored files at startup (the `i` key still toggles)
 compact_dirs = false        # true to draw a chain of single-child dirs as ONE row (src/main/java)
+expand_changed = false      # true to open the folders of files with uncommitted changes
 changed_file_view = "diff"  # changed files start in "diff", or use normal "content" by file type
+baseline = "base"           # force startup diff baseline: "base" or "head" (omit for context-smart default)
 update_check = true         # false disables all remote requests and their display
 confirm_discard = true      # false to discard annotations without confirming (on quit / worktree switch)
 scroll_lines = 3            # mouse-wheel step (content/search/help), a 1 to 10 scale: 1 slow · 3 medium · 6 fast · 10 max
 tree_width = 30             # tree column's share of the viewer pane, percent 20-80 (content takes the rest)
 tree_max_cols = 30          # HARD CAP in columns; the SMALLER of this and tree_width% wins (raise both to widen)
 tree_position = "left"      # which side the directory tree sits on: "left" (default) or "right"
+open_direction = "right"    # which way the summon key splits your pane: "right" (default) or "down"
 
 preview_max_lines = 10000   # show at most this many lines before a truncated preview (100–100000)
 preview_max_kib = 1024      # ...or this size before truncating, in KiB (1024 = 1 MB; 64–65536)
@@ -82,7 +84,8 @@ preview_max_kib = 1024      # ...or this size before truncating, in KiB (1024 = 
 
 `update_check` governs release details and project spotlights. `false` disables all remote requests
 and their display. When the key is unset, `$HERDR_FILE_VIEWER_NO_UPDATE_CHECK` also disables it.
-No separate spotlight setting exists.
+No separate spotlight setting exists. Pressing `u` remembers the current spotlight across launches
+without disabling release notices; see [Staying up to date](usage.md#staying-up-to-date).
 The system `curl` is optional: without it, document retrieval is unavailable without an error.
 
 `changed_file_view` controls only the automatic initial view for Git-changed files. Its default,
@@ -94,6 +97,13 @@ views, and the setting does not change Git status markers, changed-only filterin
 baseline, git-status mode (`d`), or `D`'s unified/side-by-side/plain diff presentation. Values are
 trimmed and case-insensitive; an unrecognized value falls back defensively to `"diff"`.
 
+`baseline` selects only the initial Git **diff baseline**. Set it to `"base"` to compare the full
+body of work since the base branch's merge-base, or `"head"` to compare working-tree changes only.
+When omitted or unrecognized, the viewer keeps its context-smart default: base on a feature branch
+or worktree, `HEAD` on the default branch. The `?` Settings section shows the baseline actually
+selected at startup, including that context-smart result. The `b` key still toggles between the two
+baselines during the session. This does not enable git-status mode (`d`) or change any tree filter.
+
 `tree_width` and `tree_max_cols` **together** decide the tree's startup width, and the **smaller of
 the two wins**: the tree is drawn at `min(tree_width% of the pane, tree_max_cols)`. So if you set
 `tree_width = 50` and nothing changes, `tree_max_cols` (default 30 columns) is capping it: raise
@@ -103,6 +113,16 @@ instead of a mostly-blank tree (it only bites past ~100 columns). `tree_position
 the `left` (default) or `right`. All three set the **startup** split inside the viewer's own pane
 (not the herdr pane, which the host decides); you can still resize live with the grow/shrink keys or
 by dragging the divider, and an explicit resize lifts the cap.
+
+`open_direction` is the one layout key that *does* reach the herdr pane. It chooses which way the
+summon action splits the pane you invoke it from: `"right"` (the default, with the viewer beside
+your work) or `"down"` (viewer underneath, terminal keeping the top half). `"bottom"` is accepted as
+a synonym for `"down"`; values are trimmed and case-insensitive, and anything unrecognized falls
+back to `"right"`. It also sets where the split from `open-file-viewer-at` goes. Two scoping notes:
+the **tab** actions (`open-file-viewer-tab`, `open-file-viewer-at-tab`) ignore it, because a tab has
+no direction; and the launcher reads it at summon time, so it applies to the **next** viewer you
+open, not to one already on screen. See [Summoning the viewer](summoning.md) for the actions
+themselves.
 
 `preview_max_lines` and `preview_max_kib` cap how much of a file the content pane shows: a file is
 displayed in full until it exceeds **either** cap, then the pane shows a truncated preview with a
@@ -118,24 +138,31 @@ of `preview_max_kib`. So raising `preview_max_kib` above ~4 MB widens how much *
 but not how much of a very large *diff* is (a diff past that bound is shown up to ~4 MB).
 
 `compact_dirs` changes the tree's **shape**, not what it shows. With it on, a chain of directories
-that each hold nothing but one subdirectory is drawn as a single row — `src/main/java/br/com` instead
-of six rows, each indented two columns further than the last. The row leads into the deepest
-directory of the chain, so expanding, collapsing, status colors, and the changed-file jump all act on
-that one. A chain stops the moment a directory holds a file or a second entry, and it follows what
-the tree is currently *showing*: a directory whose other entries are gitignored (or hidden, under
-`.`) folds like the single-child directory it appears to be.
+that each hold nothing but one subdirectory is drawn as a single row, such as `src/main/java/br/com`
+instead of six rows, each indented two columns further than the last. The row leads into the deepest
+directory of the chain, so expanding, collapsing, status colors, and the changed-file jump all act
+on that one. A chain stops the moment a directory holds a file or a second entry, and it follows
+what the tree is currently *showing*: a directory whose other entries are gitignored (or hidden,
+under `.`) folds like the single-child directory it appears to be.
 
 It is off by default because the trade depends on the repo. On a deep Java/Maven or nested monorepo
-layout — where the per-segment tree spends most of a narrow column on indentation and truncates the
-file names that matter — it wins outright. On a shallow repo it mostly costs you the 1:1 "one row is
+layout, where the per-segment tree spends most of a narrow column on indentation and truncates the
+file names that matter, it wins outright. On a shallow repo it mostly costs you the 1:1 "one row is
 one directory" reading of the tree. Turn it on if your paths are deeper than your pane is wide.
 
 One small behavior difference: deciding whether a row folds means peeking inside directories the
 tree has not opened, so a compacted tree remembers which directories fold instead of re-checking
-every frame. Listings themselves are still read live — a new file appears as immediately as it
-always did — but the *span* of a folded row can lag. If a file created outside the viewer is what
-ends a chain, the row keeps its old span until the viewer re-checks, which it does on launch, `r`,
+every frame. Listings themselves are still read live, so a new file appears as immediately as it
+always did. The *span* of a folded row can lag. If a file created outside the viewer is what ends a
+chain, the row keeps its old span until the viewer re-checks, which it does on launch, `r`,
 returning from the editor, switching baseline, and regaining focus.
+
+`expand_changed` opens the folders above every file with **uncommitted changes** (the working-tree
+status that `d` shows, not the `b` baseline), so new work is on screen without expanding anything by
+hand. It acts at launch, after a worktree switch, and whenever a refresh (`r`, regaining focus)
+finds a file that was not changed before. It only opens folders: it never moves the cursor, changes
+a filter, or collapses anything. A folder you collapse stays closed until a *different* file inside
+it changes. Off by default.
 
 `confirm_discard` guards the one piece of state the viewer can lose. Annotations (`a` / `A`) are
 session-only, so both quitting (`q`) and switching worktree (`W`) discard them. By default either
@@ -148,12 +175,11 @@ actually held, so leaving it on costs nothing in a session that never uses them.
 ## Command values
 
 Command values (`editor`, `markdown`, `diff`, `syntax`, `open`, `reveal`) are **split into
-arguments** the way a shell would for simple cases — whitespace splits, double-quotes group a
-path with spaces — but **no shell is invoked**. `editor` / `open` / `reveal` get the target
-**path** appended as the final argument; the **renderers** (`markdown` / `diff` / `syntax`)
-instead get the file **content on stdin** and your value **replaces** the whole default command
-(flags aren't merged), so a custom renderer must read stdin (glow and bat need a trailing `-`)
-and set its own flags — the token `{name}` is substituted with the file name.
+arguments** without invoking a shell. Whitespace separates arguments, and double quotes group paths
+with spaces. The viewer appends the target **path** to `editor`, `open`, and `reveal`. It sends file
+**content on stdin** to the renderers (`markdown`, `diff`, `syntax`). A renderer value replaces the
+entire default command, so a custom renderer must read stdin and set its own flags. Glow and bat
+need a trailing `-`. The viewer replaces `{name}` with the file name.
 
 **Known limitation:** the full-file-diff view derives its line-numbered gutter from the `diff`
 command by appending delta's `--line-numbers` flag; if you point `diff` at a tool that rejects
@@ -188,7 +214,7 @@ customized).
 | | `page_up` | `PageUp` | Move up one screenful (content pane when focused, else the tree cursor) |
 | | `page_down` | `PageDown`, `Space` | Move down one screenful (content pane when focused, else the tree cursor) |
 | | `expand` | `Right`, `l` | Expand the selected directory |
-| | `collapse` | `Left`, `h` | Collapse the selected directory |
+| | `collapse` | `Left`, `h` | Collapse a directory, or walk up from a file/collapsed directory in the normal tree |
 | | `activate` | `Enter` | Activate the selection: expand/collapse a directory, or open a file |
 | **View & layout** | `open_fullscreen` | `Z` | Toggle full-screen reading of the selected file |
 | | `cycle_view` | `v` | Cycle the content pane's view mode |
@@ -207,7 +233,7 @@ customized).
 | | `toggle_changed_only` | `c` | Restrict the tree to changed files (baseline-aware), or restore the full tree |
 | | `toggle_status_mode` | `d` | Toggle git-status mode: filter to current working-tree status and show working-tree diffs |
 | | `toggle_baseline` | `b` | Switch the diff baseline between base-branch and `HEAD` |
-| | `cycle_diff_render` | `D` | Cycle diff presentation — delta unified → side-by-side → plain `git diff` (side-by-side applies when the configured diff renderer is Delta) |
+| | `cycle_diff_render` | `D` | Cycle diff presentation through Delta unified, side-by-side, and plain `git diff` (side-by-side applies when the configured diff renderer is Delta) |
 | | `refresh` | `r` | Re-read git state and re-render |
 | **Open & copy** | `open_in_editor` | `e` | Hand the selected file off to an external editor |
 | | `open_with_app` | `O` | Open the selected entry with the OS default application |
@@ -224,19 +250,20 @@ customized).
 | | `prev_match` | `N` | Jump to the previous search match (wraps) |
 | | `next_changed` | `]` | Jump the tree cursor to the next changed file (wraps) |
 | | `prev_changed` | `[` | Jump the tree cursor to the previous changed file (wraps) |
-| **Session** | `dismiss_update` | `u` | Dismiss the advisory status row for this session |
+| **Session** | `dismiss_update` | `u` | Dismiss the advisory status row for this session; remember the current Spotlight across launches |
 | | `switch_worktree` | `W` | Open the worktree picker to re-root at another git worktree |
 | | `show_help` | `?` | Open the in-app help overlay (What's New and About) |
 | | `close` | `q`, `Esc` | Close the viewer and return to the prior pane |
 
-`Esc` always closes the viewer even if you rebind `close` — that floor can't be rebound away (see
-below). Keys handled inside a modal are fixed and not remappable. That includes line-select `a`
-(add an annotation for the selected line/range), annotation-editor `←`/`→`/`Home`/`End`/`Enter`/`Esc`,
-and annotation-overview `j`/`k`/arrows, `Enter`/`e`, `d`, uppercase `D`, `y`, `Esc`/`q`, as well as
-the go-to-file finder, project-content search, and `:` / `/` prompts. Remapping a global action never
-changes these local modal keys.
+`Esc` always closes the viewer even if you rebind `close`; you cannot remove that minimum binding
+(see below). Keys handled inside a modal are fixed and not remappable. That includes line-select `a`
+(add an annotation for the selected line/range), annotation-editor
+`←`/`→`/`Home`/`End`/`Enter`/`Esc`, and annotation-overview `j`/`k`/arrows, `Enter`/`e`, `d`,
+uppercase `D`, `y`, `Esc`/`q`, as well as the go-to-file finder,
+project-content search, and `:` / `/` prompts. Remapping a global
+action never changes these local modal keys.
 
-**Bindable keys** are the modifier-free surface the viewer already uses: any printable or shifted
+**Bindable keys** are the modifier-free keys the viewer already uses: any printable or shifted
 character (`g`, `<`, `{`, `?`, and capitals such as `A`, `D`, and `W` are each their own key), plus the named keys
 `Tab`, `Enter`, `Esc`, the four arrows, `Home`, `End`, `PageUp`, `PageDown`, `Space`, `Backspace`,
 `Delete`, `Insert`, and `F1` through `F12` (named keys are matched case-insensitively). There are

@@ -2510,9 +2510,10 @@ fn finder_state_empty_query() -> ViewState {
     state.finder = Some(FinderView {
         kind: FinderKind::File,
         query: String::new(),
-        matches: vec![],
+        matches: vec![].into(),
         cursor: 0,
         hscroll: 0,
+        status: None,
     });
     state
 }
@@ -2527,11 +2528,44 @@ fn finder_state_with_matches() -> ViewState {
             "src/main.rs".to_string(),
             "src/inner/main_helper.rs".to_string(),
             "README.md".to_string(),
-        ],
+        ]
+        .into(),
         cursor: 1, // the second row is highlighted
         hscroll: 0,
+        status: None,
     });
     state
+}
+
+#[test]
+fn finder_shows_background_status_without_hiding_the_query() {
+    let mut state = finder_state_empty_query();
+    let finder = state.finder.as_mut().unwrap();
+    finder.query = "main".into();
+    finder.status = Some("Indexing… 123 files".into());
+    let out = render(&state, 100, 24);
+    assert!(out.contains("Indexing… 123 files"));
+    assert!(out.contains("> main"));
+    state.finder.as_mut().unwrap().status = Some("Searching…".into());
+    assert!(render(&state, 100, 24).contains("Searching…"));
+}
+
+#[test]
+fn a_million_matches_can_be_drawn_at_the_last_row_without_height_overflow() {
+    let mut state = finder_state_empty_query();
+    let finder = state.finder.as_mut().unwrap();
+    finder.query = "file".into();
+    finder.matches = (0..1_000_000)
+        .map(|i| format!("file_{i:07}.rs"))
+        .collect::<Vec<_>>()
+        .into();
+    finder.cursor = 999_999;
+    let out = render(&state, 100, 24);
+    assert!(out.contains("file_0999999.rs"));
+    assert!(!out.contains("file_0000000.rs"));
+    let geometry =
+        herdr_file_viewer::presenter::geometry(ratatui::layout::Rect::new(0, 0, 100, 24), &state);
+    assert!(geometry.finder_scroll > 999_900);
 }
 
 #[test]
@@ -2629,9 +2663,10 @@ fn finder_state_overflow() -> ViewState {
     state.finder = Some(FinderView {
         kind: FinderKind::File,
         query: "file".to_string(),
-        matches,
+        matches: matches.into(),
         cursor: 25,
         hscroll: 0,
+        status: None,
     });
     state
 }
@@ -2747,9 +2782,10 @@ fn finder_overlay_nonempty_query_zero_matches_shows_prompt_not_placeholder() {
     state.finder = Some(FinderView {
         kind: FinderKind::File,
         query: "zzzzz".to_string(),
-        matches: vec![],
+        matches: vec![].into(),
         cursor: 0,
         hscroll: 0,
+        status: None,
     });
     let out = render(&state, 100, 24);
 
@@ -2776,49 +2812,46 @@ fn project_search_empty_query_shows_scope_and_content_placeholder() {
     let mut state = sample_state();
     state.finder = Some(FinderView {
         kind: FinderKind::ProjectContent {
-            searching: false,
-            limited: false,
             include_ignored: false,
         },
         query: String::new(),
-        matches: vec![],
+        matches: vec![].into(),
         cursor: 0,
         hscroll: 0,
+        status: None,
     });
 
     let out = render(&state, 100, 24);
     assert!(out.contains("Search contents · project"), "{out}");
-    assert!(out.contains("Type to search file contents"), "{out}");
+    assert!(out.contains("type to search file contents"), "{out}");
 }
 
 #[test]
-fn project_search_renders_loading_empty_results_limit_and_selected_row() {
-    let project = |searching, limited, matches: Vec<String>, cursor| {
+fn project_search_renders_status_chip_scope_and_selected_row() {
+    let project = |status: &str, matches: Vec<String>, cursor| {
         let mut state = sample_state();
         state.finder = Some(FinderView {
             kind: FinderKind::ProjectContent {
-                searching,
-                limited,
                 include_ignored: true,
             },
             query: "needle".into(),
-            matches,
+            matches: matches.into(),
             cursor,
             hscroll: 0,
+            status: Some(status.to_string()),
         });
         state
     };
 
-    let loading = render(&project(true, false, vec![], 0), 100, 24);
+    let loading = render(&project("Searching…", vec![], 0), 100, 24);
     assert!(loading.contains("Search contents · all files"), "{loading}");
     assert!(loading.contains("Searching…"), "{loading}");
 
-    let empty = render(&project(false, false, vec![], 0), 100, 24);
+    let empty = render(&project("No matches", vec![], 0), 100, 24);
     assert!(empty.contains("No matches"), "{empty}");
 
     let rows = project(
-        false,
-        true,
+        "First 500 matches",
         vec![
             "src/app.rs:42  fn needle()".into(),
             "src/lib.rs:7  mod needle;".into(),
@@ -2827,7 +2860,7 @@ fn project_search_renders_loading_empty_results_limit_and_selected_row() {
     );
     let out = render(&rows, 100, 24);
     assert!(out.contains("src/app.rs:42  fn needle()"), "{out}");
-    assert!(out.contains("Showing first 500 matches"), "{out}");
+    assert!(out.contains("First 500 matches"), "{out}");
     insta::assert_snapshot!("presenter_project_search_results", out);
 
     let buf = render_buffer(&rows, 100, 24);
@@ -2917,7 +2950,7 @@ fn finder_geometry_agrees_with_draw_for_mouse_click_hit_testing() {
     let rows_rect = g
         .finder_rows
         .expect("geometry().finder_rows must be Some when the finder has matches");
-    let scroll = g.finder_scroll as usize;
+    let scroll = g.finder_scroll;
 
     // The drawn row must lie inside finder_rows.
     assert!(

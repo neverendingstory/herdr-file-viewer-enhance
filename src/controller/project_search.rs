@@ -99,6 +99,7 @@ impl Controller {
             seq,
             root: self.root.clone(),
             query: state.query().to_string(),
+            is_git_repo: self.is_git_repo,
             include_ignored: state.include_ignored(),
         };
         if self.project_search_tx.send(job).is_err()
@@ -132,20 +133,20 @@ impl Controller {
     /// Borrow-free projection onto the shared finder popup surface.
     pub(super) fn project_search_view(&self) -> Option<FinderView> {
         let state = self.modal.project_search()?;
+        let rows: Vec<String> = state
+            .hits()
+            .iter()
+            .map(|hit| format!("{}:{}  {}", hit.path, hit.line, hit.excerpt))
+            .collect();
         Some(FinderView {
             kind: FinderKind::ProjectContent {
-                searching: state.searching(),
-                limited: state.limited(),
                 include_ignored: state.include_ignored(),
             },
             query: state.query().to_string(),
-            matches: state
-                .hits()
-                .iter()
-                .map(|hit| format!("{}:{}  {}", hit.path, hit.line, hit.excerpt))
-                .collect(),
+            matches: rows.into(),
             cursor: state.cursor(),
             hscroll: state.hscroll(),
+            status: state.status(),
         })
     }
 }

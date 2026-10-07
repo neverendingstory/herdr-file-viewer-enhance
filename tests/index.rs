@@ -125,23 +125,32 @@ fn works_in_non_git_dir() {
     );
 }
 
+// (i) Regression: `build_scoped(root, true)` bounds the ancestor `.gitignore` search at root's
+// own repo boundary instead of letting it climb into an unrelated enclosing directory. See the
+// matching `tree_filters.rs` test for the Tree Model side of the same fix.
 #[test]
-fn include_ignored_policy_mirrors_i_without_exposing_dot_git() {
-    let tmp = common::TempDir::new();
-    let root = tmp.path();
-    fs::write(root.join(".gitignore"), "ignored.txt\n").unwrap();
-    fs::write(root.join("visible.txt"), "visible").unwrap();
-    fs::write(root.join("ignored.txt"), "ignored").unwrap();
-    fs::create_dir(root.join(".git")).unwrap();
-    fs::write(root.join(".git/internal"), "private").unwrap();
+fn build_scoped_bounds_ancestor_gitignore_at_the_repo_boundary() {
+    let outer = common::TempDir::new();
+    fs::write(outer.path().join(".gitignore"), "vendor/\n").unwrap();
+    let inner = outer.path().join("inner");
+    fs::create_dir_all(inner.join("vendor")).unwrap();
+    common::init_repo_with_commit(&inner);
+    fs::write(inner.join("vendor/keep.txt"), "k").unwrap();
 
-    let project = index::build_with_ignored(root, false);
-    assert!(project.iter().any(|p| p == "visible.txt"));
-    assert!(!project.iter().any(|p| p == "ignored.txt"));
+    // `build` (is_git_repo = false, today's default) is unbounded and still picks up the outer
+    // ancestor's unrelated `vendor/` rule.
+    let unbounded = index::build(&inner);
+    assert!(
+        !unbounded.iter().any(|p| p.starts_with("vendor/")),
+        "sanity check: the outer ancestor .gitignore reaches in when not told this is a repo"
+    );
 
-    let all = index::build_with_ignored(root, true);
-    assert!(all.iter().any(|p| p == "ignored.txt"));
-    assert!(!all.iter().any(|p| p == ".git" || p.starts_with(".git/")));
+    // `build_scoped(&inner, true)` bounds the search at `inner`'s own `.git`.
+    let bounded = index::build_scoped(&inner, true);
+    assert!(
+        bounded.iter().any(|p| p == "vendor/keep.txt"),
+        "an unrelated ancestor .gitignore outside the repo must not hide files inside it, got: {bounded:?}"
+    );
 }
 
 // (h) AC-N1: the filesystem is unchanged after build
